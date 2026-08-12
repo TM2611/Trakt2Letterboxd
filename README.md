@@ -11,7 +11,8 @@ The workflow:
 - Uses the public Trakt API request without a private account login.
 - Excludes non-movie records defensively.
 - Splits exports into CSV files below Letterboxd's 1 MB import limit.
-- Uploads the files to Letterboxd using an injected `lbx_session` cookie.
+- Uploads the files to Letterboxd using injected session, CSRF, and Cloudflare
+  clearance cookies.
 - Keeps the CSVs attached as a seven-day `letterboxd-ready-csvs` artifact.
 
 Follow [`SETUP.md`](SETUP.md) for the complete configuration walkthrough. The
@@ -25,7 +26,7 @@ Requirements:
 
 - Python 3.x
 - A public Trakt profile
-- A Letterboxd session cookie if uploading locally
+- Letterboxd session and CSRF cookies (plus `cf_clearance`) if uploading locally
 
 Install dependencies and set the profile name:
 
@@ -43,7 +44,9 @@ python Trakt2Letterboxd.py --skip-upload
 Export and upload:
 
 ```bash
-export LETTERBOXD_SESSION_COOKIE=your_lbx_session_value
+export LETTERBOXD_SESSION_COOKIE=your_session_cookie_value
+export LETTERBOXD_CSRF_COOKIE=your_csrf_cookie_value
+export LETTERBOXD_CF_CLEARANCE=your_cf_clearance_value
 python Trakt2Letterboxd.py
 ```
 
@@ -65,5 +68,5 @@ the `letterboxd-upload-debug` artifact.
 ## Privacy and credentials
 
 The Trakt profile must be public for the history endpoint to return data. No
-private Trakt account credential is needed. Treat the Letterboxd session cookie
-like a password and store it only in a local environment or GitHub Secret.
+private Trakt account credential is needed. Treat the Letterboxd cookie values
+like passwords and store them only in a local environment or GitHub Secrets.

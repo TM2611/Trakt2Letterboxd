@@ -46,22 +46,31 @@ provided only when intentionally overriding the default public key.
 
 ---
 
-## Step 3 — Extract your Letterboxd session cookie
+## Step 3 — Extract your Letterboxd cookies
 
-The uploader does not use a username/password login. It reuses the `lbx_session`
-cookie from a browser where you are already logged in.
+The uploader does not use a username/password login. It reuses three cookies
+from a browser where you are already logged in: the session cookie
+(`letterboxd.user.CURRENT`), the CSRF cookie (`com.xk72.webparts.csrf`), and
+optionally the Cloudflare clearance cookie (`cf_clearance`).
 
 1. Open [letterboxd.com](https://letterboxd.com) and make sure you are logged in.
 2. Open Developer Tools (`F12`).
    - **Chrome/Edge:** **Application → Cookies → `https://letterboxd.com`**
    - **Firefox:** **Storage → Cookies → `https://letterboxd.com`**
    - **Safari:** **Web Inspector → Storage → Cookies**
-3. Find the row named **`lbx_session`** and copy its **Value**.
-4. Add another repository secret named `LETTERBOXD_SESSION_COOKIE` containing
-   that value.
+3. Copy the **Value** of each of these rows:
+   - **`letterboxd.user.CURRENT`** — the session cookie (required).
+   - **`com.xk72.webparts.csrf`** — the CSRF token (required).
+   - **`cf_clearance`** — Cloudflare clearance (optional, helps avoid the
+     Turnstile challenge).
+4. Add repository secrets containing those values:
+   - `LETTERBOXD_SESSION_COOKIE` ← `letterboxd.user.CURRENT` value
+   - `LETTERBOXD_CSRF_COOKIE` ← `com.xk72.webparts.csrf` value
+   - `LETTERBOXD_CF_CLEARANCE` ← `cf_clearance` value (optional)
 
 If you log out of Letterboxd, clear cookies, or the session expires, repeat this
-step and update the secret.
+step and update the secrets. The session and CSRF cookies are the ones to watch;
+`cf_clearance` is long-lived (~1 year).
 
 ---
 
@@ -89,7 +98,8 @@ files as an artifact for seven days.
 4. Fetches all pages, retaining movie records only.
 5. Writes `letterboxd_history.csv` to `exports/`, splitting large exports into
    numbered parts below Letterboxd's 1 MB limit.
-6. Optionally injects `LETTERBOXD_SESSION_COOKIE` and uploads each CSV.
+6. Optionally injects the Letterboxd session, CSRF, and clearance cookies and
+   uploads each CSV.
 7. Stores the generated CSV files as the `letterboxd-ready-csvs` artifact.
 
 ## Local usage
@@ -107,10 +117,13 @@ Export history without opening a browser:
 python Trakt2Letterboxd.py --skip-upload
 ```
 
-To upload locally, also set `LETTERBOXD_SESSION_COOKIE`:
+To upload locally, also set the session and CSRF cookies (and optionally
+`cf_clearance`):
 
 ```bash
-export LETTERBOXD_SESSION_COOKIE=your_lbx_session_value
+export LETTERBOXD_SESSION_COOKIE=your_session_cookie_value
+export LETTERBOXD_CSRF_COOKIE=your_csrf_cookie_value
+export LETTERBOXD_CF_CLEARANCE=your_cf_clearance_value
 python Trakt2Letterboxd.py
 ```
 
@@ -123,15 +136,15 @@ set `TRAKT_CLIENT_ID` before running the command.
 |---|---|
 | `TRAKT_USERNAME is required` | Add the public profile name to the environment or the `TRAKT_USERNAME` repository secret. |
 | Trakt returns `401`, `403`, or no history | Confirm the profile visibility is **Public**, check the username, and wait briefly after changing privacy settings. |
-| `LETTERBOXD_SESSION_COOKIE is required` | Set the cookie secret, or run with `--skip-upload` when only an export is needed. |
-| Letterboxd asks for login | Re-extract `lbx_session` from a currently logged-in browser session and replace the secret. |
-| Cloudflare or Turnstile appears | Check the `letterboxd-upload-debug` artifact and retry with a current session cookie. |
+| `LETTERBOXD_SESSION_COOKIE and LETTERBOXD_CSRF_COOKIE are required` | Set both cookie secrets, or run with `--skip-upload` when only an export is needed. |
+| Letterboxd asks for login | Re-extract `letterboxd.user.CURRENT` (and `com.xk72.webparts.csrf`) from a currently logged-in browser session and replace the secrets. |
+| Cloudflare or Turnstile appears | Check the `letterboxd-upload-debug` artifact and retry with a current `cf_clearance` cookie. |
 | No CSV artifact is produced | Inspect the workflow log for the Trakt response or an empty history export. |
 
 ## Security notes
 
-- Keep `LETTERBOXD_SESSION_COOKIE` private. It grants access to the associated
-  Letterboxd session while valid.
+- Keep the Letterboxd cookie secrets private. They grant access to the
+  associated Letterboxd session while valid.
 - The Trakt history request is intentionally public and does not send a private
   account credential.
 - Do not commit local environment files or session-cookie values.

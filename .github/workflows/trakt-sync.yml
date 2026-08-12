@@ -43,6 +43,8 @@ jobs:
           TRAKT_USERNAME: ${{ secrets.TRAKT_USERNAME }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID || '0128c95089a7b58477204806a1b62ee130182b48c121c1eb9fe1d37b915fc5cb' }}
           LETTERBOXD_SESSION_COOKIE: ${{ secrets.LETTERBOXD_SESSION_COOKIE }}
+          LETTERBOXD_CSRF_COOKIE: ${{ secrets.LETTERBOXD_CSRF_COOKIE }}
+          LETTERBOXD_CF_CLEARANCE: ${{ secrets.LETTERBOXD_CF_CLEARANCE }}
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.skip_upload }}" == "true" ]]; then
             python Trakt2Letterboxd.py --skip-upload

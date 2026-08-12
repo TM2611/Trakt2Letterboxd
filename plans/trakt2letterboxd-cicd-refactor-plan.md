@@ -13,7 +13,9 @@ The Trakt side uses only:
 - `TRAKT_USERNAME` — required public profile name.
 - `TRAKT_CLIENT_ID` — optional override for the supplied default public API key.
 
-`LETTERBOXD_SESSION_COOKIE` remains required only when the upload step is used.
+The upload step requires three cookies captured from a logged-in Letterboxd
+browser session (see "Letterboxd cookie model" below). They are supplied as
+GitHub secrets and are only read when the upload step runs.
 
 The Trakt request is an unauthenticated `GET` to:
 
@@ -51,11 +53,32 @@ The profile must be configured as **Public** in Trakt Privacy Settings.
 
 ## Letterboxd upload
 
-- Keep the existing Playwright uploader and `lbx_session` cookie injection.
+- Keep the existing Playwright uploader but replace the single `lbx_session`
+  cookie with the three real cookies described below.
 - Do not use username/password login.
 - Upload one CSV at a time and wait for the import confirmation.
 - Save diagnostic screenshots to `debug/` when a browser or challenge failure
   occurs.
+
+### Letterboxd cookie model
+
+A working upload needs more than one cookie. The uploader injects all of the
+following before navigating to the import page:
+
+| Cookie | Role | Expiry |
+|---|---|---|
+| `letterboxd.user.CURRENT` | The real session cookie (httpOnly, secure, SameSite=Lax). Proves the browser is logged in. | Session cookie; server-controlled, no fixed timer. Refresh when the run reports a login prompt (weeks-to-months). |
+| `com.xk72.webparts.csrf` | CSRF token validated on the import form POST. Without it the submission may be rejected even with a valid session. | Short-lived; refresh alongside the session cookie. |
+| `cf_clearance` | Cloudflare proof that the Turnstile challenge was passed; carrying it over is what keeps the headless browser from being challenged. | Long-lived (~1 year). |
+
+The old `lbx_session` name does not exist on Letterboxd and is removed.
+
+> Caveat: `cf_clearance` is bound to the IP address and user agent that solved
+> the challenge. GitHub Actions runners use dynamic IPs, so a clearance cookie
+> captured from a home browser may be rejected by Cloudflare from CI. The
+> session and CSRF cookies are not IP-bound and should work. If `cf_clearance`
+> proves unreliable in CI, the uploader still injects it but treats a Cloudflare
+> challenge as a recoverable diagnostic rather than a hard failure.
 
 ## GitHub Actions workflow
 
@@ -64,7 +87,8 @@ The workflow runs on the Sunday schedule or through manual dispatch:
 1. Check out the repository.
 2. Install Python dependencies and Chromium.
 3. Pass `TRAKT_USERNAME`, the default or overridden `TRAKT_CLIENT_ID`, and
-   `LETTERBOXD_SESSION_COOKIE` through the step environment.
+   `LETTERBOXD_SESSION_COOKIE`, `LETTERBOXD_CSRF_COOKIE`, and
+   `LETTERBOXD_CF_CLEARANCE` through the step environment.
 4. Run the history-only exporter, optionally with `--skip-upload`.
 5. Upload generated CSVs and failure screenshots as artifacts.
 
@@ -88,4 +112,4 @@ the workflow.
 - Verify the CLI exposes only `--skip-upload` and `--export-dir`.
 - Search the project for removed authentication and list-export concepts.
 - Confirm the workflow passes only the current Trakt configuration and the
-  Letterboxd cookie.
+  three Letterboxd cookies.

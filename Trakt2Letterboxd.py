@@ -8,14 +8,19 @@ profile must be public. The script can run unattended inside GitHub Actions:
      1 MB import limit (we split at 950 KB to leave headroom), with the exact
      column headers repeated at the top of every chunk.
   3. Optionally uploads every chunk automatically to letterboxd.com/import
-     using Playwright + playwright-stealth, authenticating via the injected
-     `lbx_session` cookie instead of a username/password flow.
+     using Playwright + playwright-stealth, authenticating via injected
+     session cookies instead of a username/password flow.
 
 Environment variables used:
     TRAKT_USERNAME          -- public Trakt profile name to fetch
     TRAKT_CLIENT_ID         -- API key header; defaults to the supplied public key
-    LETTERBOXD_SESSION_COOKIE-- value of the `lbx_session` cookie from a logged-in
-                                Letterboxd browser session (used for upload)
+    LETTERBOXD_SESSION_COOKIE -- value of the `letterboxd.user.CURRENT` session
+                                 cookie from a logged-in Letterboxd browser
+                                 session (used for upload)
+    LETTERBOXD_CSRF_COOKIE  -- value of the `com.xk72.webparts.csrf` cookie
+                               (required for the import form POST)
+    LETTERBOXD_CF_CLEARANCE -- optional value of the `cf_clearance` cookie to
+                               avoid the Cloudflare Turnstile challenge
 
 CLI flags:
     --skip-upload                    export CSVs only; do not touch Letterboxd
@@ -227,12 +232,16 @@ IMPORT_ERROR_PATTERNS = [
 
 
 class LetterboxdUploader:
-    """Uploads CSV files to letterboxd.com/import using a session cookie."""
+    """Uploads CSV files to letterboxd.com/import using session cookies."""
 
-    def __init__(self, session_cookie, debug_dir="debug"):
+    def __init__(self, session_cookie, csrf_cookie, cf_clearance="", debug_dir="debug"):
         if not session_cookie:
             raise ValueError("LETTERBOXD_SESSION_COOKIE must not be empty")
+        if not csrf_cookie:
+            raise ValueError("LETTERBOXD_CSRF_COOKIE must not be empty")
         self.session_cookie = session_cookie
+        self.csrf_cookie = csrf_cookie
+        self.cf_clearance = cf_clearance
         self.debug_dir = debug_dir
 
     # -- helpers ----------------------------------------------------------
@@ -319,17 +328,42 @@ class LetterboxdUploader:
                 stealth_sync(page)
                 print("  playwright-stealth applied (legacy stealth_sync).")
 
-            # Authenticate by injecting the session cookie BEFORE navigating.
-            # No username/password flow - that triggers CAPTCHAs.
-            context.add_cookies([{
-                "name": "lbx_session",
-                "value": self.session_cookie,
-                "domain": ".letterboxd.com",
-                "path": "/",
-                "secure": True,
-                "httpOnly": True,
-                "sameSite": "Lax",
-            }])
+            # Authenticate by injecting the real Letterboxd cookies BEFORE
+            # navigating. No username/password flow - that triggers CAPTCHAs.
+            # The session cookie proves login, the CSRF cookie is validated on
+            # the import form POST, and cf_clearance (when present) avoids the
+            # Cloudflare Turnstile challenge.
+            cookies = [
+                {
+                    "name": "letterboxd.user.CURRENT",
+                    "value": self.session_cookie,
+                    "domain": ".letterboxd.com",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                    "sameSite": "Lax",
+                },
+                {
+                    "name": "com.xk72.webparts.csrf",
+                    "value": self.csrf_cookie,
+                    "domain": ".letterboxd.com",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": False,
+                    "sameSite": "Lax",
+                },
+            ]
+            if self.cf_clearance:
+                cookies.append({
+                    "name": "cf_clearance",
+                    "value": self.cf_clearance,
+                    "domain": ".letterboxd.com",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                    "sameSite": "None",
+                })
+            context.add_cookies(cookies)
 
             for csv_path in csv_paths:
                 print(f"Uploading {csv_path} to Letterboxd...")
@@ -427,13 +461,20 @@ def main(argv=None):
         return 0
 
     session_cookie = os.environ.get("LETTERBOXD_SESSION_COOKIE", "").strip()
-    if not session_cookie:
+    csrf_cookie = os.environ.get("LETTERBOXD_CSRF_COOKIE", "").strip()
+    cf_clearance = os.environ.get("LETTERBOXD_CF_CLEARANCE", "").strip()
+    if not session_cookie or not csrf_cookie:
         raise SystemExit(
-            "LETTERBOXD_SESSION_COOKIE is required for the upload (see SETUP.md). "
-            "Use --skip-upload to export only."
+            "LETTERBOXD_SESSION_COOKIE and LETTERBOXD_CSRF_COOKIE are required "
+            "for the upload (see SETUP.md). Use --skip-upload to export only."
         )
 
-    uploader = LetterboxdUploader(session_cookie=session_cookie, debug_dir="debug")
+    uploader = LetterboxdUploader(
+        session_cookie=session_cookie,
+        csrf_cookie=csrf_cookie,
+        cf_clearance=cf_clearance,
+        debug_dir="debug",
+    )
     uploader.upload(all_paths)
     print("Done.")
     return 0
