@@ -1,36 +1,23 @@
 """Trakt2Letterboxd - Headless CI/CD exporter & Letterboxd importer.
 
-Fork refactor of the original interactive script so it can run unattended
-inside GitHub Actions every week:
+The Trakt request uses the public movie-history endpoint, so the target Trakt
+profile must be public. The script can run unattended inside GitHub Actions:
 
-  1. Authenticates against the Trakt API using tokens from environment
-     variables (no interactive device-code flow, no hardcoded credentials).
-  2. Refreshes the access token proactively (7-day buffer before expiry) or
-     reactively (on HTTP 401), then emits the rotated tokens to GITHUB_OUTPUT
-     so the workflow can update the repository secrets via `gh secret set`.
-  3. Fetches the user's watched history and watchlist (movies only - anything
-     that is not a movie is explicitly dropped).
-  4. Writes Letterboxd-ready CSVs chunked so every file stays under Letterboxd's
+  1. Fetches the user's public movie history without an authenticated session.
+  2. Writes Letterboxd-ready CSVs chunked so every file stays under Letterboxd's
      1 MB import limit (we split at 950 KB to leave headroom), with the exact
      column headers repeated at the top of every chunk.
-  5. Optionally uploads every chunk automatically to letterboxd.com/import
+  3. Optionally uploads every chunk automatically to letterboxd.com/import
      using Playwright + playwright-stealth, authenticating via the injected
      `lbx_session` cookie instead of a username/password flow.
 
 Environment variables used:
-    TRAKT_CLIENT_ID          -- Trakt API app client id
-    TRAKT_CLIENT_SECRET      -- Trakt API app client secret
-    TRAKT_ACCESS_TOKEN       -- current OAuth access token
-    TRAKT_REFRESH_TOKEN      -- current OAuth refresh token
-    TRAKT_TOKEN_EXPIRES_AT   -- epoch seconds when the access token expires
-                                (>created_at + expires_in from the OAuth response)
+    TRAKT_USERNAME          -- public Trakt profile name to fetch
+    TRAKT_CLIENT_ID         -- API key header; defaults to the supplied public key
     LETTERBOXD_SESSION_COOKIE-- value of the `lbx_session` cookie from a logged-in
                                 Letterboxd browser session (used for upload)
-    GITHUB_OUTPUT            -- (optional, set by GitHub Actions) file path where
-                                refreshed token outputs are written
 
 CLI flags:
-    --lists {all,history,watchlist}  which list(s) to export (default: all)
     --skip-upload                    export CSVs only; do not touch Letterboxd
     --export-dir DIR                 output directory for CSVs (default: exports)
 """
@@ -42,7 +29,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from urllib.parse import quote
 
 import requests
 
@@ -53,12 +40,9 @@ IMPORT_URL = "https://letterboxd.com/import/"
 # encoding / column-order surprises.
 MAX_CHUNK_BYTES = 950 * 1024
 
-# Refresh the access token when it is within this window of expiring, so the
-# weekly cron always has plenty of runway before Trakt cuts it off (~3 months).
-REFRESH_BUFFER_SECONDS = 7 * 24 * 60 * 60
-
-# Default lifetime used only if the OAuth response omits expires_in/created_at.
-DEFAULT_ACCESS_TOKEN_SECONDS = 90 * 24 * 60 * 60
+# Public Trakt API key used by default for the trakt-api-key header. It can be
+# overridden with TRAKT_CLIENT_ID when a different public API key is supplied.
+DEFAULT_CLIENT_ID = "0128c95089a7b58477204806a1b62ee130182b48c121c1eb9fe1d37b915fc5cb"
 
 # Exact Letterboxd column headers; they must appear at the top of every chunk.
 LETTERBOXD_HEADERS = ["WatchedDate", "tmdbID", "imdbID", "Title", "Year"]
@@ -68,138 +52,32 @@ REQUEST_TIMEOUT = 30
 
 
 # ---------------------------------------------------------------------------
-# Authentication / token management
-# ---------------------------------------------------------------------------
-
-class TraktAuth:
-    """Reads Trakt credentials from the environment and handles token refresh."""
-
-    def __init__(self):
-        self.client_id = os.environ.get("TRAKT_CLIENT_ID", "").strip()
-        self.client_secret = os.environ.get("TRAKT_CLIENT_SECRET", "").strip()
-        self.access_token = os.environ.get("TRAKT_ACCESS_TOKEN", "").strip()
-        self.refresh_token = os.environ.get("TRAKT_REFRESH_TOKEN", "").strip()
-        self.expires_at = self._parse_expiry(os.environ.get("TRAKT_TOKEN_EXPIRES_AT", ""))
-        self.session = requests.Session()
-        self.refreshed = False
-        self._emitted = False
-
-    @staticmethod
-    def _parse_expiry(value):
-        if not value:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            print("WARNING: TRAKT_TOKEN_EXPIRES_AT is not a number; ignoring it. "
-                  "A 401-driven refresh will be used as a fallback.")
-            return None
-
-    def ensure_valid(self):
-        """Validate config and refresh proactively if the token is near expiry."""
-        missing = [
-            key for key in (
-                "TRAKT_CLIENT_ID", "TRAKT_CLIENT_SECRET",
-                "TRAKT_ACCESS_TOKEN", "TRAKT_REFRESH_TOKEN",
-            )
-            if not os.environ.get(key, "").strip()
-        ]
-        if missing:
-            raise SystemExit(
-                "Missing required environment variable(s): "
-                + ", ".join(missing)
-                + ". Follow SETUP.md to generate them."
-            )
-        if self.expires_at is not None and time.time() >= (self.expires_at - REFRESH_BUFFER_SECONDS):
-            print("Access token is expired or expiring within 7 days - refreshing now.")
-            self.refresh()
-
-    def refresh(self):
-        """Exchange the refresh token for a fresh token pair. Raises on failure."""
-        url = API_ROOT + "/oauth/token"
-        payload = {
-            "refresh_token": self.refresh_token,
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
-            "grant_type": "refresh_token",
-        }
-        response = self.session.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"Token refresh failed with HTTP {response.status_code}: {response.text} "
-                "(the refresh token may be inactive/expired - rerun the bootstrap "
-                "steps in SETUP.md to mint a fresh pair)."
-            )
-        data = response.json()
-        if not data.get("access_token"):
-            raise RuntimeError("Token refresh response contained no access_token.")
-
-        self.access_token = data["access_token"]
-        if data.get("refresh_token"):  # Trakt rotates the refresh token too
-            self.refresh_token = data["refresh_token"]
-        created_at = data.get("created_at") or int(time.time())
-        expires_in = data.get("expires_in") or DEFAULT_ACCESS_TOKEN_SECONDS
-        self.expires_at = int(created_at) + int(expires_in)
-        self.refreshed = True
-
-        human = datetime.fromtimestamp(self.expires_at, tz=timezone.utc).isoformat()
-        print(f"Access token refreshed; new tokens valid until {human}.")
-        self.emit_outputs()
-
-    def emit_outputs(self):
-        """Write refreshed tokens to GITHUB_OUTPUT (CI) or stdout (local run).
-
-        Called from refresh() immediately so secret rotation still happens even
-        if a later step (e.g. the upload) fails and the job exits non-zero.
-        """
-        if not self.refreshed or self._emitted:
-            return
-        self._emitted = True
-        lines = [
-            "token_refreshed=true",
-            f"trakt_access_token={self.access_token}",
-            f"trakt_refresh_token={self.refresh_token}",
-            f"trakt_token_expires_at={int(self.expires_at)}",
-        ]
-        output_file = os.environ.get("GITHUB_OUTPUT", "").strip()
-        if output_file:
-            with open(output_file, "a", encoding="utf-8") as fh:
-                for line in lines:
-                    fh.write(line + "\n")
-            print("Refreshed tokens written to GITHUB_OUTPUT for secret rotation.")
-        else:
-            print("Refreshed tokens (local run - update your secrets manually):")
-            for line in lines:
-                print(f"  {line}")
-
-
-# ---------------------------------------------------------------------------
 # Trakt API client
 # ---------------------------------------------------------------------------
 
 class TraktClient:
-    """Fetches movie-only lists from the Trakt API, handling 401-driven refresh."""
+    """Fetches movie history from a public Trakt profile."""
 
-    def __init__(self, auth):
-        self.auth = auth
+    def __init__(self):
+        self.username = os.environ.get("TRAKT_USERNAME", "").strip()
+        if not self.username:
+            raise SystemExit(
+                "TRAKT_USERNAME is required. Set it to the public Trakt profile "
+                "name before running the exporter."
+            )
+        self.client_id = os.environ.get("TRAKT_CLIENT_ID", "").strip() or DEFAULT_CLIENT_ID
+        self.session = requests.Session()
 
     def _headers(self):
         return {
             "Content-Type": "application/json",
-            "User-Agent": "Trakt2Letterboxd/2.0 (fork, CI)",
-            "Authorization": "Bearer " + self.auth.access_token,
             "trakt-api-version": "2",
-            "trakt-api-key": self.auth.client_id,
+            "trakt-api-key": self.client_id,
         }
 
     def _get(self, url):
-        """GET with one retry after a refresh if the token is rejected."""
-        response = self.auth.session.get(url, headers=self._headers(), timeout=REQUEST_TIMEOUT)
-        if response.status_code == 401:
-            print("HTTP 401 - access token rejected, refreshing and retrying once.")
-            self.auth.refresh()
-            response = self.auth.session.get(url, headers=self._headers(), timeout=REQUEST_TIMEOUT)
+        """Perform an unauthenticated GET and raise a useful API error."""
+        response = self.session.get(url, headers=self._headers(), timeout=REQUEST_TIMEOUT)
         if response.status_code != 200:
             raise RuntimeError(
                 f"Trakt API error {response.status_code} for {url}: "
@@ -207,13 +85,14 @@ class TraktClient:
             )
         return response
 
-    def fetch_movies(self, list_name):
-        """Fetch every page of /sync/<list>/movies and return Letterboxd rows."""
+    def fetch_movies(self):
+        """Fetch every page of the user's public movie history."""
         movies = []
         page = 1
+        username = quote(self.username, safe="")
         while True:
             url = (
-                f"{API_ROOT}/sync/{list_name}/movies"
+                f"{API_ROOT}/users/{username}/history/movies"
                 f"?page={page}&limit={PAGE_LIMIT}"
             )
             response = self._get(url)
@@ -225,7 +104,7 @@ class TraktClient:
                 if row is not None:
                     movies.append(row)
                     kept += 1
-            print(f"  {list_name}: page {page}/{page_count} ({kept} movies on this page)")
+            print(f"  history: page {page}/{page_count} ({kept} movies on this page)")
             if page >= page_count or not payload:
                 break
             page += 1
@@ -297,7 +176,7 @@ def csv_chunks(rows, max_bytes=MAX_CHUNK_BYTES):
 
 
 def write_export(name_stem, rows, export_dir):
-    """Write chunked Letterboxd CSVs for one list; returns list of file paths."""
+    """Write chunked Letterboxd CSVs for the history; return file paths."""
     chunks = list(csv_chunks(rows))
     if not chunks:
         print(f"{name_stem}: no rows, nothing to export.")
@@ -513,13 +392,7 @@ class LetterboxdUploader:
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="Trakt2Letterboxd",
-        description="Export Trakt movie history/watchlist to Letterboxd-ready CSVs and upload them.",
-    )
-    parser.add_argument(
-        "--lists",
-        choices=("all", "history", "watchlist"),
-        default="all",
-        help="which Trakt list(s) to export (default: all)",
+        description="Export public Trakt movie history to Letterboxd-ready CSVs and upload them.",
     )
     parser.add_argument(
         "--skip-upload",
@@ -535,16 +408,10 @@ def main(argv=None):
 
     print("Initializing Trakt2Letterboxd (CI mode)...")
 
-    auth = TraktAuth()
-    auth.ensure_valid()
-    client = TraktClient(auth)
-
-    lists_to_fetch = ["history", "watchlist"] if args.lists == "all" else [args.lists]
-    all_paths = []
-    for name in lists_to_fetch:
-        print(f"Fetching Trakt {name}...")
-        rows = client.fetch_movies(name)
-        all_paths.extend(write_export(f"letterboxd_{name}", rows, args.export_dir))
+    client = TraktClient()
+    print(f"Fetching public Trakt history for {client.username}...")
+    rows = client.fetch_movies()
+    all_paths = write_export("letterboxd_history", rows, args.export_dir)
 
     if not all_paths:
         print("No CSV files were generated - nothing to do.")

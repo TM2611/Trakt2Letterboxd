@@ -1,76 +1,69 @@
 # Trakt2Letterboxd
-This is a simple cross-platform script to export your movies from Trakt to Letterboxd.
 
-## Automated sync (recommended)
-This fork adds a fully-automated, headless pipeline that runs every Sunday in
-GitHub Actions:
+This project exports a user's Trakt movie history into Letterboxd-ready CSV
+files. It can run locally or automatically every Sunday in GitHub Actions.
 
-- Exports your Trakt **movie history and watchlist** (TV shows/episodes filtered out).
-- Splits the export into Letterboxd-ready CSVs under the **1 MB import limit**
-  (950 KB chunks, headers repeated per chunk).
-- **Uploads them automatically** to letterboxd.com/import via Playwright using
-  your `lbx_session` cookie — no downloads, no clicks.
-- Tracks your Trakt access-token expiry and **rotates the tokens** by updating
-  the repository secrets, so you never touch it again.
-- Leaves the CSVs attached to each run as a downloadable artifact
-  (`letterboxd-ready-csvs`, 7-day retention) as a safety net.
+## Automated sync
 
-**Follow [`SETUP.md`](SETUP.md) to configure it.** It covers creating your own
-Trakt API app, minting the initial tokens with cURL (no browser flow), grabbing
-your `lbx_session` cookie, and adding the required GitHub Secrets.
+The workflow:
 
-The manual instructions below still work if you prefer to run locally.
+- Reads movie history from the user's **public Trakt profile**.
+- Uses the public Trakt API request without a private account login.
+- Excludes non-movie records defensively.
+- Splits exports into CSV files below Letterboxd's 1 MB import limit.
+- Uploads the files to Letterboxd using an injected `lbx_session` cookie.
+- Keeps the CSVs attached as a seven-day `letterboxd-ready-csvs` artifact.
 
-## What you'll need
+Follow [`SETUP.md`](SETUP.md) for the complete configuration walkthrough. The
+important Trakt requirement is to make the profile public and add only
+`TRAKT_USERNAME` to the repository secrets. The supplied public Client ID is
+already the default used by the script and workflow.
 
-- **Python 3.x** — if you don't have it, download and install it from the [official Python website](https://www.python.org/downloads/). The default options during installation are fine.
-- The **Trakt2Letterboxd.py** file — download it from this page by clicking the green **Code** button above, then **Download ZIP**, and unzip it somewhere easy to find like your Desktop.
+## Local usage
 
-## How to run it (locally)
+Requirements:
 
-1. Install dependencies: `pip install -r requirements.txt`
-2. Set the environment variables listed in [`SETUP.md`](SETUP.md) (Trakt API app keys + tokens, Letterboxd session cookie).
-3. Open your terminal (on Mac, search for **Terminal** in Spotlight; on Windows, search for **Command Prompt**).
-4. Navigate to the folder where you put the script. For example, if it's on your Desktop:
-   - **Mac:** `cd ~/Desktop/Trakt2Letterboxd`
-   - **Windows:** `cd %USERPROFILE%\Desktop\Trakt2Letterboxd`
-5. Run the script with: `python3 Trakt2Letterboxd.py`
-   - To only generate the CSV files (no Letterboxd upload): `python3 Trakt2Letterboxd.py --skip-upload`
+- Python 3.x
+- A public Trakt profile
+- A Letterboxd session cookie if uploading locally
 
-## Authentication
+Install dependencies and set the profile name:
 
-Authentication is now fully headless — no browser prompts, no codes to enter.
-All credentials come from environment variables (`TRAKT_CLIENT_ID`,
-`TRAKT_CLIENT_SECRET`, `TRAKT_ACCESS_TOKEN`, `TRAKT_REFRESH_TOKEN`,
-`TRAKT_TOKEN_EXPIRES_AT`). The access token is refreshed automatically before
-it expires (~3 months lifetime) using the refresh token, and the refreshed pair
-is written to `GITHUB_OUTPUT` when running in CI so the workflow can update the
-corresponding GitHub Secrets for the next run.
+```bash
+pip install -r requirements.txt
+export TRAKT_USERNAME=your_trakt_username
+```
 
-See [`SETUP.md`](SETUP.md) for how to produce your initial token pair with
-cURL — the same device-code flow the old script used, minus the interactivity.
+Export history only:
 
-## What you get
+```bash
+python Trakt2Letterboxd.py --skip-upload
+```
 
-Letterboxd-ready CSV files are written to the `exports/` folder:
+Export and upload:
 
-- `letterboxd_history.csv` (or `_partN.csv` chunks) — all the movies you've watched on Trakt.
-- `letterboxd_watchlist.csv` (or `_partN.csv` chunks) — all the movies on your Trakt watchlist.
+```bash
+export LETTERBOXD_SESSION_COOKIE=your_lbx_session_value
+python Trakt2Letterboxd.py
+```
 
-Every file is kept under 1 MB (Letterboxd's import limit) with the exact
-headers `WatchedDate, tmdbID, imdbID, Title, Year` repeated at the top of each
-chunk. TV shows, seasons, and episodes are excluded — only movies are exported.
+The optional `TRAKT_CLIENT_ID` environment variable can override the supplied
+default when a different public API key is intentionally required.
 
-## Importing into Letterboxd
+## Output
 
-In GitHub Actions the import is **automatic** via Playwright. If you run the
-script locally (or use the `--skip-upload` flag), the generated CSVs are also
-attached to every workflow run as the `letterboxd-ready-csvs` artifact for
-7 days — download them and go to [letterboxd.com/import](https://letterboxd.com/import/).
+Files are written to `exports/`:
 
-## Need help?
+- `letterboxd_history.csv`, or numbered parts for a large history export.
+- Every file contains `WatchedDate,tmdbID,imdbID,Title,Year` headers.
+- TV shows, seasons, and episodes are excluded.
 
-If you need more help running Python scripts, check these guides: [Windows](https://docs.python.org/3/faq/windows.html) and [MacOS](https://docs.python.org/3/using/mac.html). (Folks on Linux, you should already know what you're doing!). If nothing works, please feel free to raise a GitHub issue and I will try my best to guide you.
+In GitHub Actions, the generated files are also available in the
+`letterboxd-ready-csvs` artifact. If an upload fails, screenshots are stored in
+the `letterboxd-upload-debug` artifact.
 
-## Note
-The script has now been updated to the new Trakt API spec (2026) and everything works as expected.
+## Privacy and credentials
+
+The Trakt profile must be public for the history endpoint to return data. No
+private Trakt account credential is needed. Treat the Letterboxd session cookie
+like a password and store it only in a local environment or GitHub Secret.
