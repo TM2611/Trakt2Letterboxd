@@ -1,3 +1,12 @@
+# --- Local caches / artifacts ---
 t_token
-*.csv
+exports/
+debug/
+__pycache__/
+*.pyc
+
+# --- Editor ---
 .vscode/
+
+# --- Generated CSVs (kept out of git; shipped as Actions artifacts instead) ---
+*.csv

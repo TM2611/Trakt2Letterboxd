@@ -1,0 +1,86 @@
+name: Trakt to Letterboxd Sync
+
+on:
+  schedule:
+    # Every Sunday at 00:00 UTC
+    - cron: "0 0 * * 0"
+  workflow_dispatch:
+    inputs:
+      skip_upload:
+        description: "Only export CSVs - do not upload to Letterboxd (for testing)"
+        type: boolean
+        default: false
+
+# NOTE: GITHUB_TOKEN cannot manage repository secrets, so token rotation runs
+# with a dedicated PAT stored in the GH_TOKEN secret (see SETUP.md). We only
+# request read access for repository contents.
+permissions:
+  contents: read
+
+concurrency:
+  group: trakt-to-letterboxd-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Export and upload
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Run Trakt export and Letterboxd upload
+        id: trakt
+        env:
+          TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID }}
+          TRAKT_CLIENT_SECRET: ${{ secrets.TRAKT_CLIENT_SECRET }}
+          TRAKT_ACCESS_TOKEN: ${{ secrets.TRAKT_ACCESS_TOKEN }}
+          TRAKT_REFRESH_TOKEN: ${{ secrets.TRAKT_REFRESH_TOKEN }}
+          TRAKT_TOKEN_EXPIRES_AT: ${{ secrets.TRAKT_TOKEN_EXPIRES_AT }}
+          LETTERBOXD_SESSION_COOKIE: ${{ secrets.LETTERBOXD_SESSION_COOKIE }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.skip_upload }}" == "true" ]]; then
+            python Trakt2Letterboxd.py --skip-upload
+          else
+            python Trakt2Letterboxd.py
+          fi
+
+      - name: Rotate Trakt secrets (if the access token was refreshed)
+        if: steps.trakt.outputs.token_refreshed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          gh secret set TRAKT_ACCESS_TOKEN --body "${{ steps.trakt.outputs.trakt_access_token }}"
+          gh secret set TRAKT_REFRESH_TOKEN --body "${{ steps.trakt.outputs.trakt_refresh_token }}"
+          gh secret set TRAKT_TOKEN_EXPIRES_AT --body "${{ steps.trakt.outputs.trakt_token_expires_at }}"
+          echo "Trakt secrets rotated for the next run."
+
+      - name: Upload Letterboxd-ready CSVs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: letterboxd-ready-csvs
+          path: exports/*.csv
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload debug screenshots (on failure)
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: letterboxd-upload-debug
+          path: debug/
+          retention-days: 7
+          if-no-files-found: ignore

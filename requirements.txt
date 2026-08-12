@@ -1,0 +1,6 @@
+# HTTP client for the Trakt API
+requests>=2.31,<3
+
+# Browser automation for the Letterboxd upload
+playwright>=1.45
+playwright-stealth>=1.0.13

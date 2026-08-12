@@ -1,42 +1,72 @@
-
 # Trakt2Letterboxd
 This is a simple cross-platform script to export your movies from Trakt to Letterboxd.
+
+## Automated sync (recommended)
+This fork adds a fully-automated, headless pipeline that runs every Sunday in
+GitHub Actions:
+
+- Exports your Trakt **movie history and watchlist** (TV shows/episodes filtered out).
+- Splits the export into Letterboxd-ready CSVs under the **1 MB import limit**
+  (950 KB chunks, headers repeated per chunk).
+- **Uploads them automatically** to letterboxd.com/import via Playwright using
+  your `lbx_session` cookie — no downloads, no clicks.
+- Tracks your Trakt access-token expiry and **rotates the tokens** by updating
+  the repository secrets, so you never touch it again.
+- Leaves the CSVs attached to each run as a downloadable artifact
+  (`letterboxd-ready-csvs`, 7-day retention) as a safety net.
+
+**Follow [`SETUP.md`](SETUP.md) to configure it.** It covers creating your own
+Trakt API app, minting the initial tokens with cURL (no browser flow), grabbing
+your `lbx_session` cookie, and adding the required GitHub Secrets.
+
+The manual instructions below still work if you prefer to run locally.
 
 ## What you'll need
 
 - **Python 3.x** — if you don't have it, download and install it from the [official Python website](https://www.python.org/downloads/). The default options during installation are fine.
 - The **Trakt2Letterboxd.py** file — download it from this page by clicking the green **Code** button above, then **Download ZIP**, and unzip it somewhere easy to find like your Desktop.
 
-## How to run it
+## How to run it (locally)
 
-1. Open your terminal (on Mac, search for **Terminal** in Spotlight; on Windows, search for **Command Prompt**).
-2. Navigate to the folder where you put the script. For example, if it's on your Desktop:
+1. Install dependencies: `pip install -r requirements.txt`
+2. Set the environment variables listed in [`SETUP.md`](SETUP.md) (Trakt API app keys + tokens, Letterboxd session cookie).
+3. Open your terminal (on Mac, search for **Terminal** in Spotlight; on Windows, search for **Command Prompt**).
+4. Navigate to the folder where you put the script. For example, if it's on your Desktop:
    - **Mac:** `cd ~/Desktop/Trakt2Letterboxd`
    - **Windows:** `cd %USERPROFILE%\Desktop\Trakt2Letterboxd`
-3. Run the script with: `python3 Trakt2Letterboxd.py`
+5. Run the script with: `python3 Trakt2Letterboxd.py`
+   - To only generate the CSV files (no Letterboxd upload): `python3 Trakt2Letterboxd.py --skip-upload`
 
-## Connecting your Trakt account
+## Authentication
 
-The first time you run the script, it will ask you to connect your Trakt account. It will print a URL and a short code, something like this:
+Authentication is now fully headless — no browser prompts, no codes to enter.
+All credentials come from environment variables (`TRAKT_CLIENT_ID`,
+`TRAKT_CLIENT_SECRET`, `TRAKT_ACCESS_TOKEN`, `TRAKT_REFRESH_TOKEN`,
+`TRAKT_TOKEN_EXPIRES_AT`). The access token is refreshed automatically before
+it expires (~3 months lifetime) using the refresh token, and the refreshed pair
+is written to `GITHUB_OUTPUT` when running in CI so the workflow can update the
+corresponding GitHub Secrets for the next run.
 
-```
-Go to https://trakt.tv/activate on your web browser and enter the below user code there:
-
-ABCD1234
-```
-
-Just open that URL in your browser, enter the code shown, and approve the connection. Come back to the terminal and the script will continue automatically.
-
-Your login is saved locally so you won't need to do this every time.
+See [`SETUP.md`](SETUP.md) for how to produce your initial token pair with
+cURL — the same device-code flow the old script used, minus the interactivity.
 
 ## What you get
 
-Two CSV files will be created in the same folder as the script:
+Letterboxd-ready CSV files are written to the `exports/` folder:
 
-- **trakt-exported-history.csv** — all the movies you've watched on Trakt.
-- **trakt-exported-watchlist.csv** — all the movies on your Trakt watchlist.
+- `letterboxd_history.csv` (or `_partN.csv` chunks) — all the movies you've watched on Trakt.
+- `letterboxd_watchlist.csv` (or `_partN.csv` chunks) — all the movies on your Trakt watchlist.
 
-To import them into Letterboxd, go to [letterboxd.com/import](https://letterboxd.com/import/) and upload the files there.
+Every file is kept under 1 MB (Letterboxd's import limit) with the exact
+headers `WatchedDate, tmdbID, imdbID, Title, Year` repeated at the top of each
+chunk. TV shows, seasons, and episodes are excluded — only movies are exported.
+
+## Importing into Letterboxd
+
+In GitHub Actions the import is **automatic** via Playwright. If you run the
+script locally (or use the `--skip-upload` flag), the generated CSVs are also
+attached to every workflow run as the `letterboxd-ready-csvs` artifact for
+7 days — download them and go to [letterboxd.com/import](https://letterboxd.com/import/).
 
 ## Need help?
 
