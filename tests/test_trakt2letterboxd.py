@@ -7,6 +7,10 @@ from unittest.mock import Mock, patch
 
 from Trakt2Letterboxd import (
     CONSENT_SELECTOR,
+    IMPORT_ERROR_PATTERNS,
+    IMPORT_SUCCESS_PATTERNS,
+    IMPORT_ERROR_PATTERNS,
+    IMPORT_SUCCESS_PATTERNS,
     LETTERBOXD_HEADERS,
     PLAYWRIGHT_TIMEOUT_MS,
     PLAYWRIGHT_TIMEOUT_SECONDS,
@@ -169,6 +173,8 @@ class FakeLocator:
 
     def wait_for(self, **kwargs):
         self.wait_calls.append(kwargs)
+        if kwargs.get("state") == "visible" and self._count == 0:
+            raise TimeoutError("locator is not visible")
 
     def is_visible(self):
         return self._visible
@@ -218,6 +224,41 @@ class ImportControlTests(unittest.TestCase):
 
         self.assertEqual(label, "Import films button")
         self.assertIs(control, legacy)
+
+    def test_saved_title_count_is_success_for_singular_and_plural(self):
+        self.assertTrue(
+            any(pattern.search("Saved 1 title") for pattern in IMPORT_SUCCESS_PATTERNS)
+        )
+        self.assertTrue(
+            any(pattern.search("Saved 191 titles") for pattern in IMPORT_SUCCESS_PATTERNS)
+        )
+
+    def test_generic_pre_submit_import_text_is_not_success(self):
+        self.assertFalse(
+            any(pattern.search("Your import") for pattern in IMPORT_SUCCESS_PATTERNS)
+        )
+
+    def test_post_submit_import_text_is_success(self):
+        self.assertTrue(
+            any(
+                pattern.search("Your import has been queued")
+                for pattern in IMPORT_SUCCESS_PATTERNS
+            )
+        )
+
+    def test_zero_saved_titles_is_not_success(self):
+        self.assertFalse(
+            any(pattern.search("Saved 0 titles") for pattern in IMPORT_SUCCESS_PATTERNS)
+        )
+
+    def test_pre_submit_error_text_is_not_new_error(self):
+        body = "12 titles didn't match"
+        self.assertFalse(
+            any(
+                len(pattern.findall(body)) > len(pattern.findall(body))
+                for pattern in IMPORT_ERROR_PATTERNS
+            )
+        )
 
     @patch("Trakt2Letterboxd.LetterboxdUploader")
     @patch("Trakt2Letterboxd.write_export", return_value=["exports/history.csv"])

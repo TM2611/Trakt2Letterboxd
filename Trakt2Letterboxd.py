@@ -65,9 +65,10 @@ PAGE_LIMIT = 100
 REQUEST_TIMEOUT = 15
 PLAYWRIGHT_TIMEOUT_MS = 15_000
 PLAYWRIGHT_TIMEOUT_SECONDS = 15
+CONSENT_WAIT_MS = 3_000
 CONSENT_SELECTOR = (
     'button.fc-button.fc-cta-consent.fc-primary-button'
-    '[aria-label="Consent"]:visible'
+    '[aria-label="Consent"]'
 )
 
 
@@ -294,10 +295,14 @@ CLOUDFLARE_PATTERNS = [
 
 # Success indicators on the import page after submitting.
 IMPORT_SUCCESS_PATTERNS = [
+    re.compile(r"saved\s+[1-9]\d*\s+titles?", re.IGNORECASE),
     re.compile(r"import\s+(?:is\s+)?(?:in\s+progress|processing|started)", re.IGNORECASE),
     re.compile(r"import\s+(?:complete|successful|succeeded)", re.IGNORECASE),
     re.compile(r"(?:films?|movies?)\s+imported", re.IGNORECASE),
-    re.compile(r"your\s+import", re.IGNORECASE),
+    re.compile(
+        r"your\s+import.*(?:queued|queue|processing|progress|complete|successful|succeeded)",
+        re.IGNORECASE,
+    ),
 ]
 
 # Explicit error indicators shown by Letterboxd's import UI.
@@ -357,25 +362,22 @@ class LetterboxdUploader:
         not present on every run. Prefer its stable class/ARIA selector, then use
         an exact visible button-label fallback for minor markup changes.
         """
-        candidates = [
-            page.locator(CONSENT_SELECTOR).first,
-            page.locator(
-                "button:visible",
-                has_text=re.compile(r"^\s*Consent\s*$", re.IGNORECASE),
-            ).first,
-        ]
-
-        consent = None
-        for candidate in candidates:
+        consent = page.locator(CONSENT_SELECTOR).first
+        try:
+            consent.wait_for(state="visible", timeout=CONSENT_WAIT_MS)
+        except Exception:
+            # Keep a text-based fallback for small markup changes, but do not
+            # wait again: the confirmed selector above handled async injection.
             try:
-                if candidate.count() > 0:
-                    consent = candidate
-                    break
+                fallback = page.locator(
+                    "button:visible",
+                    has_text=re.compile(r"^\s*Consent\s*$", re.IGNORECASE),
+                ).first
+                if fallback.count() == 0:
+                    return False
+                consent = fallback
             except Exception:
-                continue
-
-        if consent is None:
-            return False
+                return False
 
         try:
             consent.click(timeout=PLAYWRIGHT_TIMEOUT_MS)
@@ -448,7 +450,12 @@ class LetterboxdUploader:
             return False
         return any(pattern.search(body) for pattern in CLOUDFLARE_PATTERNS)
 
-    def _await_outcome(self, page, timeout_seconds=PLAYWRIGHT_TIMEOUT_SECONDS):
+    def _await_outcome(
+        self,
+        page,
+        timeout_seconds=PLAYWRIGHT_TIMEOUT_SECONDS,
+        initial_body="",
+    ):
         """Wait for either a success or an error state after clicking Import."""
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
@@ -459,10 +466,16 @@ class LetterboxdUploader:
                 body = page.locator("body").inner_text(timeout=PLAYWRIGHT_TIMEOUT_MS)
             except Exception:
                 body = ""
-            if any(pattern.search(body) for pattern in IMPORT_ERROR_PATTERNS):
+            if any(
+                len(pattern.findall(body)) > len(pattern.findall(initial_body))
+                for pattern in IMPORT_ERROR_PATTERNS
+            ):
                 self._screenshot(page, "import_error")
                 return False
-            if any(pattern.search(body) for pattern in IMPORT_SUCCESS_PATTERNS):
+            if any(
+                len(pattern.findall(body)) > len(pattern.findall(initial_body))
+                for pattern in IMPORT_SUCCESS_PATTERNS
+            ):
                 return True
             time.sleep(2)
         self._screenshot(page, "import_timeout")
@@ -620,6 +633,12 @@ class LetterboxdUploader:
 
                     print(f"  {control_label} found; clicking Import.")
                     try:
+                        initial_body = page.locator("body").inner_text(
+                            timeout=PLAYWRIGHT_TIMEOUT_MS
+                        )
+                    except Exception:
+                        initial_body = ""
+                    try:
                         confirm.click(timeout=PLAYWRIGHT_TIMEOUT_MS)
                     except Exception as exc:
                         self._screenshot(page, "import_click_failed")
@@ -627,7 +646,7 @@ class LetterboxdUploader:
                             f"Could not click the {control_label}: {exc}"
                         ) from exc
 
-                    if not self._await_outcome(page):
+                    if not self._await_outcome(page, initial_body=initial_body):
                         raise RuntimeError(
                             f"Letterboxd did not confirm the import of {csv_path} - "
                             "see screenshot artifact."
