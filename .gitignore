@@ -1,4 +1,5 @@
 # --- Local caches / artifacts ---
+.env
 t_token
 exports/
 debug/
@@ -10,3 +11,5 @@ __pycache__/
 
 # --- Generated CSVs (kept out of git; shipped as Actions artifacts instead) ---
 *.csv
+.env
+venv

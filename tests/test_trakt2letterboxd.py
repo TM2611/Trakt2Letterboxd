@@ -1,15 +1,20 @@
 import csv
 import io
+import os
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from Trakt2Letterboxd import (
     LETTERBOXD_HEADERS,
+    PLAYWRIGHT_TIMEOUT_MS,
+    PLAYWRIGHT_TIMEOUT_SECONDS,
+    REQUEST_TIMEOUT,
     TraktClient,
     _serialize_rows,
     csv_chunks,
     LetterboxdUploader,
+    main,
 )
 
 
@@ -106,6 +111,70 @@ class TraktRatingTests(unittest.TestCase):
         self.assertEqual(content.splitlines()[0], ",".join(LETTERBOXD_HEADERS))
         self.assertEqual(parsed[0]["Rating10"], "8")
         self.assertEqual(list(csv_chunks([row], max_bytes=len(content))), [[row]])
+
+
+class TimeoutAndDebugModeTests(unittest.TestCase):
+    def test_timeout_policy_is_fifteen_seconds(self):
+        self.assertEqual(REQUEST_TIMEOUT, 15)
+        self.assertEqual(PLAYWRIGHT_TIMEOUT_MS, 15_000)
+        self.assertEqual(PLAYWRIGHT_TIMEOUT_SECONDS, 15)
+
+    def test_trakt_requests_use_configured_timeout(self):
+        client = object.__new__(TraktClient)
+        client.client_id = "client-id"
+        client.session = SimpleNamespace(get=Mock(return_value=Mock(status_code=200)))
+
+        client._get("https://example.test/movies")
+
+        client.session.get.assert_called_once_with(
+            "https://example.test/movies",
+            headers=client._headers(),
+            timeout=REQUEST_TIMEOUT,
+        )
+
+    def test_headed_failure_pause_waits_for_local_inspection(self):
+        uploader = LetterboxdUploader("session", "csrf", headed=True)
+
+        with patch("builtins.input", return_value="") as wait_for_input:
+            uploader._pause_on_failure(object())
+
+        wait_for_input.assert_called_once()
+
+    def test_headless_failure_does_not_wait_for_input(self):
+        uploader = LetterboxdUploader("session", "csrf")
+
+        with patch("builtins.input") as wait_for_input:
+            uploader._pause_on_failure(object())
+
+        wait_for_input.assert_not_called()
+
+    @patch("Trakt2Letterboxd.LetterboxdUploader")
+    @patch("Trakt2Letterboxd.write_export", return_value=["exports/history.csv"])
+    @patch("Trakt2Letterboxd.TraktClient")
+    def test_headed_flag_is_passed_to_uploader(self, client_type, write_export, uploader_type):
+        client_type.return_value.username = "test-user"
+        client_type.return_value.fetch_movies.return_value = []
+
+        with patch.dict(
+            os.environ,
+            {
+                "LETTERBOXD_SESSION_COOKIE": "session",
+                "LETTERBOXD_CSRF_COOKIE": "csrf",
+                "LETTERBOXD_CF_CLEARANCE": "clearance",
+            },
+            clear=False,
+        ):
+            result = main(["--headed"])
+
+        self.assertEqual(result, 0)
+        uploader_type.assert_called_once_with(
+            session_cookie="session",
+            csrf_cookie="csrf",
+            cf_clearance="clearance",
+            debug_dir="debug",
+            headed=True,
+        )
+        uploader_type.return_value.upload.assert_called_once_with(["exports/history.csv"])
 
 
 class StealthCompatibilityTests(unittest.TestCase):

@@ -111,11 +111,12 @@ files as an artifact for seven days.
 
 ## Local usage
 
-Install the dependencies and set the public profile name:
+Install the dependencies and create a local environment file from the template:
 
 ```bash
 pip install -r requirements.txt
-export TRAKT_USERNAME=your_trakt_username
+cp .env.example .env
+# Edit .env and set TRAKT_USERNAME.
 ```
 
 Export history without opening a browser:
@@ -124,18 +125,34 @@ Export history without opening a browser:
 python Trakt2Letterboxd.py --skip-upload
 ```
 
-To upload locally, also set the session and CSRF cookies (and optionally
-`cf_clearance`):
+To upload locally, also add the session and CSRF cookies (and optionally
+`cf_clearance`) to `.env`:
 
 ```bash
-export LETTERBOXD_SESSION_COOKIE=your_session_cookie_value
-export LETTERBOXD_CSRF_COOKIE=your_csrf_cookie_value
-export LETTERBOXD_CF_CLEARANCE=your_cf_clearance_value
+# Edit .env and set:
+# LETTERBOXD_SESSION_COOKIE=your_session_cookie_value
+# LETTERBOXD_CSRF_COOKIE=your_csrf_cookie_value
+# LETTERBOXD_CF_CLEARANCE=your_cf_clearance_value
 python Trakt2Letterboxd.py
 ```
 
+To see the browser while diagnosing a local upload problem, run headed mode:
+
+```bash
+python Trakt2Letterboxd.py --headed
+```
+
+The headed run pauses after an upload failure, allowing inspection of the visible
+page before the browser closes. This flag is local-only; the scheduled workflow
+continues to launch Chromium headlessly. Trakt requests and Playwright waits use
+a 15-second timeout in both modes.
+
+`Trakt2Letterboxd.py` loads `.env` automatically for local runs. Existing shell
+variables take precedence over `.env`, which keeps CI and one-off overrides
+working as before. The `.env` file is ignored by Git and must never be committed.
+
 The Client ID default is already present in the script. To override it locally,
-set `TRAKT_CLIENT_ID` before running the command.
+add `TRAKT_CLIENT_ID` to `.env` or set it before running the command.
 
 ## Troubleshooting
 

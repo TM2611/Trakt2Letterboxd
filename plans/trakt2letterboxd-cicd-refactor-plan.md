@@ -113,7 +113,9 @@ the workflow.
 ## Validation
 
 - Compile the Python entry point.
-- Verify the CLI exposes only `--skip-upload` and `--export-dir`.
+- Verify the CLI exposes `--skip-upload`, `--export-dir`, and the local-only
+  `--headed` browser-debugging flag.
+- Verify Trakt requests and Playwright waits use the 15-second timeout policy.
 - Search the project for removed authentication and list-export concepts.
 - Confirm the workflow passes only the current Trakt configuration and the
   three Letterboxd cookies.

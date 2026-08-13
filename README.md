@@ -31,11 +31,12 @@ Requirements:
 - A public Trakt profile
 - Letterboxd session and CSRF cookies (plus `cf_clearance`) if uploading locally
 
-Install dependencies and set the profile name:
+Install dependencies and create a local environment file from the template:
 
 ```bash
 pip install -r requirements.txt
-export TRAKT_USERNAME=your_trakt_username
+cp .env.example .env
+# Edit .env and set TRAKT_USERNAME and, when uploading, the Letterboxd cookies.
 ```
 
 Export history only:
@@ -44,14 +45,26 @@ Export history only:
 python Trakt2Letterboxd.py --skip-upload
 ```
 
-Export and upload:
+Export and upload using the same `.env` values:
 
 ```bash
-export LETTERBOXD_SESSION_COOKIE=your_session_cookie_value
-export LETTERBOXD_CSRF_COOKIE=your_csrf_cookie_value
-export LETTERBOXD_CF_CLEARANCE=your_cf_clearance_value
 python Trakt2Letterboxd.py
 ```
+
+For local upload debugging, use headed mode to show the Chromium window:
+
+```bash
+python Trakt2Letterboxd.py --headed
+```
+
+Headed mode is intended for local runs and pauses after an upload failure so the
+current browser page can be inspected before it closes. The Trakt HTTP requests
+and all Playwright waits use a 15-second timeout. Scheduled GitHub Actions runs
+remain headless unless the flag is explicitly supplied.
+
+The script loads `.env` automatically when run locally. Values explicitly set in
+the shell take precedence, so CI and one-off overrides continue to work. Keep
+`.env` private; it is ignored by Git.
 
 The optional `TRAKT_CLIENT_ID` environment variable can override the supplied
 default when a different public API key is intentionally required.

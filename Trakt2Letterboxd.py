@@ -27,6 +27,7 @@ Environment variables used:
 CLI flags:
     --skip-upload                    export CSVs only; do not touch Letterboxd
     --export-dir DIR                 output directory for CSVs (default: exports)
+    --headed                         show the browser for local upload debugging
 """
 
 import argparse
@@ -38,10 +39,16 @@ import sys
 import time
 from urllib.parse import quote
 
+from dotenv import load_dotenv
 import requests
 
 API_ROOT = "https://api.trakt.tv"
 IMPORT_URL = "https://letterboxd.com/import/"
+
+# Load local configuration when present. Explicitly exported variables (and CI
+# environment variables) take precedence because python-dotenv does not
+# override values that are already set by default.
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 # Letterboxd import limit is 1 MB per file; 950 KB leaves headroom for
 # encoding / column-order surprises.
@@ -55,7 +62,9 @@ DEFAULT_CLIENT_ID = "0128c95089a7b58477204806a1b62ee130182b48c121c1eb9fe1d37b915
 LETTERBOXD_HEADERS = ["WatchedDate", "tmdbID", "imdbID", "Title", "Year", "Rating10"]
 
 PAGE_LIMIT = 100
-REQUEST_TIMEOUT = 30
+REQUEST_TIMEOUT = 15
+PLAYWRIGHT_TIMEOUT_MS = 15_000
+PLAYWRIGHT_TIMEOUT_SECONDS = 15
 
 
 # ---------------------------------------------------------------------------
@@ -299,7 +308,14 @@ IMPORT_ERROR_PATTERNS = [
 class LetterboxdUploader:
     """Uploads CSV files to letterboxd.com/import using session cookies."""
 
-    def __init__(self, session_cookie, csrf_cookie, cf_clearance="", debug_dir="debug"):
+    def __init__(
+        self,
+        session_cookie,
+        csrf_cookie,
+        cf_clearance="",
+        debug_dir="debug",
+        headed=False,
+    ):
         if not session_cookie:
             raise ValueError("LETTERBOXD_SESSION_COOKIE must not be empty")
         if not csrf_cookie:
@@ -308,6 +324,7 @@ class LetterboxdUploader:
         self.csrf_cookie = csrf_cookie
         self.cf_clearance = cf_clearance
         self.debug_dir = debug_dir
+        self.headed = headed
 
     # -- helpers ----------------------------------------------------------
 
@@ -320,6 +337,15 @@ class LetterboxdUploader:
         except Exception as exc:  # never let screenshotting kill the flow
             print(f"  could not save screenshot: {exc}")
 
+    def _pause_on_failure(self, page):
+        """Keep a headed browser open so a local failure can be inspected."""
+        if not self.headed:
+            return
+        try:
+            input("  headed debug mode: inspect the browser, then press Enter to close it... ")
+        except (EOFError, KeyboardInterrupt):
+            print("  headed debug session could not wait for input; closing the browser.")
+
     @staticmethod
     def _cloudflare_blocked(page):
         if page.locator('iframe[src*="challenges.cloudflare.com"]').count() > 0:
@@ -327,12 +353,12 @@ class LetterboxdUploader:
         if page.locator(".cf-turnstile, .g-recaptcha").count() > 0:
             return True
         try:
-            body = page.locator("body").inner_text(timeout=3000)
+            body = page.locator("body").inner_text(timeout=PLAYWRIGHT_TIMEOUT_MS)
         except Exception:
             return False
         return any(pattern.search(body) for pattern in CLOUDFLARE_PATTERNS)
 
-    def _await_outcome(self, page, timeout_seconds=90):
+    def _await_outcome(self, page, timeout_seconds=PLAYWRIGHT_TIMEOUT_SECONDS):
         """Wait for either a success or an error state after clicking Import."""
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
@@ -340,7 +366,7 @@ class LetterboxdUploader:
                 self._screenshot(page, "cloudflare_after_submit")
                 raise RuntimeError("Cloudflare challenge appeared after submitting the import.")
             try:
-                body = page.locator("body").inner_text(timeout=5000)
+                body = page.locator("body").inner_text(timeout=PLAYWRIGHT_TIMEOUT_MS)
             except Exception:
                 body = ""
             if any(pattern.search(body) for pattern in IMPORT_ERROR_PATTERNS):
@@ -391,7 +417,7 @@ class LetterboxdUploader:
         with sync_playwright() as p:
             try:
                 browser = p.chromium.launch(
-                    headless=True,
+                    headless=not self.headed,
                     args=["--disable-blink-features=AutomationControlled"],
                 )
             except Exception as exc:
@@ -409,6 +435,8 @@ class LetterboxdUploader:
                 locale="en-US",
                 timezone_id="Europe/London",
             )
+            context.set_default_timeout(PLAYWRIGHT_TIMEOUT_MS)
+            context.set_default_navigation_timeout(PLAYWRIGHT_TIMEOUT_MS)
 
             # Apply stealth before any navigation. API differs across
             # playwright-stealth versions.
@@ -453,57 +481,66 @@ class LetterboxdUploader:
                 })
             context.add_cookies(cookies)
 
-            for csv_path in csv_paths:
-                print(f"Uploading {csv_path} to Letterboxd...")
-                page.goto(IMPORT_URL, wait_until="domcontentloaded", timeout=60000)
-
-                if self._cloudflare_blocked(page):
-                    self._screenshot(page, "cloudflare_block")
-                    raise RuntimeError(
-                        "Cloudflare Turnstile challenge detected on letterboxd.com. "
-                        "Upload aborted - check the screenshot artifact."
+            try:
+                for csv_path in csv_paths:
+                    print(f"Uploading {csv_path} to Letterboxd...")
+                    page.goto(
+                        IMPORT_URL,
+                        wait_until="domcontentloaded",
+                        timeout=PLAYWRIGHT_TIMEOUT_MS,
                     )
 
-                # Confirm we are actually logged in (cookie accepted).
-                if "/login" in page.url or page.locator('a[href*="/log-in"], a[href*="/login"]').count() > 0:
-                    self._screenshot(page, "not_authenticated")
-                    raise RuntimeError(
-                        "Letterboxd is asking for login - LETTERBOXD_SESSION_COOKIE "
-                        "is invalid or expired. Re-extract it and update the secret."
-                    )
+                    if self._cloudflare_blocked(page):
+                        self._screenshot(page, "cloudflare_block")
+                        raise RuntimeError(
+                            "Cloudflare Turnstile challenge detected on letterboxd.com. "
+                            "Upload aborted - check the screenshot artifact."
+                        )
 
-                # Pick up the CSV via the import page's file input.
-                file_input = page.locator('input[type="file"]').first
-                if file_input.count() == 0:
-                    self._screenshot(page, "no_file_input")
-                    raise RuntimeError("Could not find the file input on the import page.")
-                file_input.set_input_files(csv_path)
+                    # Confirm we are actually logged in (cookie accepted).
+                    if "/login" in page.url or page.locator('a[href*="/log-in"], a[href*="/login"]').count() > 0:
+                        self._screenshot(page, "not_authenticated")
+                        raise RuntimeError(
+                            "Letterboxd is asking for login - LETTERBOXD_SESSION_COOKIE "
+                            "is invalid or expired. Re-extract it and update the secret."
+                        )
 
-                # Wait for the "Import X films" confirmation button (up to 60 s).
-                confirm = page.locator(
-                    "button:visible",
-                    has_text=re.compile(r"import\s+\d+\s+films?", re.IGNORECASE),
-                ).first
-                try:
-                    confirm.wait_for(state="visible", timeout=60000)
-                except Exception:
-                    self._screenshot(page, "no_confirm_button")
-                    raise RuntimeError(
-                        "The 'Import X films' confirmation button never appeared "
-                        "after uploading the file - see screenshot artifact."
-                    )
+                    # Pick up the CSV via the import page's file input.
+                    file_input = page.locator('input[type="file"]').first
+                    if file_input.count() == 0:
+                        self._screenshot(page, "no_file_input")
+                        raise RuntimeError("Could not find the file input on the import page.")
+                    file_input.set_input_files(csv_path)
 
-                print("  confirmation button found; clicking Import.")
-                confirm.click()
+                    # Wait for the "Import X films" confirmation button.
+                    confirm = page.locator(
+                        "button:visible",
+                        has_text=re.compile(r"import\s+\d+\s+films?", re.IGNORECASE),
+                    ).first
+                    try:
+                        confirm.wait_for(state="visible", timeout=PLAYWRIGHT_TIMEOUT_MS)
+                    except Exception:
+                        self._screenshot(page, "no_confirm_button")
+                        raise RuntimeError(
+                            "The 'Import X films' confirmation button never appeared "
+                            "after uploading the file - see screenshot artifact."
+                        )
 
-                if not self._await_outcome(page):
-                    raise RuntimeError(
-                        f"Letterboxd did not confirm the import of {csv_path} - "
-                        "see screenshot artifact."
-                    )
-                print(f"  {os.path.basename(csv_path)} imported successfully.")
+                    print("  confirmation button found; clicking Import.")
+                    confirm.click()
 
-            browser.close()
+                    if not self._await_outcome(page):
+                        raise RuntimeError(
+                            f"Letterboxd did not confirm the import of {csv_path} - "
+                            "see screenshot artifact."
+                        )
+                    print(f"  {os.path.basename(csv_path)} imported successfully.")
+            except Exception:
+                self._pause_on_failure(page)
+                raise
+            finally:
+                browser.close()
+
             print("All CSV chunks uploaded to Letterboxd.")
 
 
@@ -526,9 +563,15 @@ def main(argv=None):
         default="exports",
         help="directory for generated CSV files (default: exports)",
     )
+    parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="show the browser window for local upload debugging",
+    )
     args = parser.parse_args(argv)
 
-    print("Initializing Trakt2Letterboxd (CI mode)...")
+    mode = "headed local debug" if args.headed else "headless"
+    print(f"Initializing Trakt2Letterboxd ({mode} mode)...")
 
     client = TraktClient()
     print(f"Fetching public Trakt history and ratings for {client.username}...")
@@ -562,6 +605,7 @@ def main(argv=None):
         csrf_cookie=csrf_cookie,
         cf_clearance=cf_clearance,
         debug_dir="debug",
+        headed=args.headed,
     )
     uploader.upload(all_paths)
     print("Done.")
