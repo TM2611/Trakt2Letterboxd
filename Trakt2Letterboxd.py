@@ -65,6 +65,10 @@ PAGE_LIMIT = 100
 REQUEST_TIMEOUT = 15
 PLAYWRIGHT_TIMEOUT_MS = 15_000
 PLAYWRIGHT_TIMEOUT_SECONDS = 15
+CONSENT_SELECTOR = (
+    'button.fc-button.fc-cta-consent.fc-primary-button'
+    '[aria-label="Consent"]:visible'
+)
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +350,92 @@ class LetterboxdUploader:
         except (EOFError, KeyboardInterrupt):
             print("  headed debug session could not wait for input; closing the browser.")
 
+    def _dismiss_consent(self, page):
+        """Dismiss Letterboxd's visible consent dialog when it is present.
+
+        The consent banner is supplied by a third-party consent component and is
+        not present on every run. Prefer its stable class/ARIA selector, then use
+        an exact visible button-label fallback for minor markup changes.
+        """
+        candidates = [
+            page.locator(CONSENT_SELECTOR).first,
+            page.locator(
+                "button:visible",
+                has_text=re.compile(r"^\s*Consent\s*$", re.IGNORECASE),
+            ).first,
+        ]
+
+        consent = None
+        for candidate in candidates:
+            try:
+                if candidate.count() > 0:
+                    consent = candidate
+                    break
+            except Exception:
+                continue
+
+        if consent is None:
+            return False
+
+        try:
+            consent.click(timeout=PLAYWRIGHT_TIMEOUT_MS)
+            try:
+                consent.wait_for(state="hidden", timeout=2_000)
+            except Exception:
+                # A consent click can detach the banner during a small page
+                # update. Only treat it as a failure if it remains visible.
+                try:
+                    if consent.is_visible():
+                        raise RuntimeError("consent button remained visible")
+                except RuntimeError:
+                    raise
+                except Exception:
+                    pass
+            print("  Letterboxd consent dialog dismissed.")
+            return True
+        except Exception as exc:
+            self._screenshot(page, "consent_click_failed")
+            raise RuntimeError(
+                f"Could not click Letterboxd's Consent button: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _import_control(page):
+        """Return the first supported import control and its human-readable label."""
+        candidates = [
+            (
+                "Import Titles anchor",
+                page.locator(
+                    "a.save-users-imported-imdb-history.submit-matched-films:visible",
+                    has_text=re.compile(r"^\s*Import Titles\s*$", re.IGNORECASE),
+                ).first,
+            ),
+            (
+                "Import Titles link",
+                page.locator(
+                    "a:visible",
+                    has_text=re.compile(r"^\s*Import Titles\s*$", re.IGNORECASE),
+                ).first,
+            ),
+            (
+                "Import films button",
+                page.locator(
+                    "button:visible",
+                    has_text=re.compile(r"import\s+\d+\s+films?", re.IGNORECASE),
+                ).first,
+            ),
+        ]
+
+        for label, candidate in candidates:
+            try:
+                if candidate.count() == 0:
+                    continue
+                candidate.wait_for(state="visible", timeout=PLAYWRIGHT_TIMEOUT_MS)
+                return label, candidate
+            except Exception:
+                continue
+        return None, None
+
     @staticmethod
     def _cloudflare_blocked(page):
         if page.locator('iframe[src*="challenges.cloudflare.com"]').count() > 0:
@@ -497,6 +587,8 @@ class LetterboxdUploader:
                             "Upload aborted - check the screenshot artifact."
                         )
 
+                    self._dismiss_consent(page)
+
                     # Confirm we are actually logged in (cookie accepted).
                     if "/login" in page.url or page.locator('a[href*="/log-in"], a[href*="/login"]').count() > 0:
                         self._screenshot(page, "not_authenticated")
@@ -512,22 +604,28 @@ class LetterboxdUploader:
                         raise RuntimeError("Could not find the file input on the import page.")
                     file_input.set_input_files(csv_path)
 
-                    # Wait for the "Import X films" confirmation button.
-                    confirm = page.locator(
-                        "button:visible",
-                        has_text=re.compile(r"import\s+\d+\s+films?", re.IGNORECASE),
-                    ).first
-                    try:
-                        confirm.wait_for(state="visible", timeout=PLAYWRIGHT_TIMEOUT_MS)
-                    except Exception:
+                    # A consent banner can appear after the file has been
+                    # selected, so dismiss it again immediately before import.
+                    self._dismiss_consent(page)
+
+                    # Letterboxd currently renders an anchor labelled
+                    # "Import Titles"; retain support for older button markup.
+                    control_label, confirm = self._import_control(page)
+                    if confirm is None:
                         self._screenshot(page, "no_confirm_button")
                         raise RuntimeError(
-                            "The 'Import X films' confirmation button never appeared "
+                            "The Letterboxd import control never appeared "
                             "after uploading the file - see screenshot artifact."
                         )
 
-                    print("  confirmation button found; clicking Import.")
-                    confirm.click()
+                    print(f"  {control_label} found; clicking Import.")
+                    try:
+                        confirm.click(timeout=PLAYWRIGHT_TIMEOUT_MS)
+                    except Exception as exc:
+                        self._screenshot(page, "import_click_failed")
+                        raise RuntimeError(
+                            f"Could not click the {control_label}: {exc}"
+                        ) from exc
 
                     if not self._await_outcome(page):
                         raise RuntimeError(

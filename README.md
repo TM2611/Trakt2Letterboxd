@@ -14,6 +14,9 @@ The workflow:
 - Uses the public Trakt API request without a private account login.
 - Excludes non-movie records defensively.
 - Splits exports into CSV files below Letterboxd's 1 MB import limit.
+- Dismisses Letterboxd's visible consent dialog before selecting and importing a file.
+- Supports Letterboxd's current `Import Titles` link as well as the older
+  `Import <number> films` confirmation button.
 - Uploads the files to Letterboxd using injected session, CSRF, and Cloudflare
   clearance cookies.
 - Keeps the CSVs attached as a seven-day `letterboxd-ready-csvs` artifact.

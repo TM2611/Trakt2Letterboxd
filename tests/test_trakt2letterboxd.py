@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from Trakt2Letterboxd import (
+    CONSENT_SELECTOR,
     LETTERBOXD_HEADERS,
     PLAYWRIGHT_TIMEOUT_MS,
     PLAYWRIGHT_TIMEOUT_SECONDS,
@@ -147,6 +148,76 @@ class TimeoutAndDebugModeTests(unittest.TestCase):
             uploader._pause_on_failure(object())
 
         wait_for_input.assert_not_called()
+
+
+class FakeLocator:
+    def __init__(self, count=0, visible=True):
+        self._count = count
+        self._visible = visible
+        self.click_calls = 0
+        self.wait_calls = []
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return self._count
+
+    def click(self, **kwargs):
+        self.click_calls += 1
+
+    def wait_for(self, **kwargs):
+        self.wait_calls.append(kwargs)
+
+    def is_visible(self):
+        return self._visible
+
+
+class FakePage:
+    def __init__(self, locators):
+        self.locators = locators
+
+    def locator(self, selector, **kwargs):
+        return self.locators.get(selector, FakeLocator())
+
+
+class ImportControlTests(unittest.TestCase):
+    def test_dismisses_exact_consent_button(self):
+        consent = FakeLocator(count=1)
+        page = FakePage({CONSENT_SELECTOR: consent})
+        uploader = LetterboxdUploader("session", "csrf")
+
+        self.assertTrue(uploader._dismiss_consent(page))
+        self.assertEqual(consent.click_calls, 1)
+
+    def test_missing_consent_is_not_an_error(self):
+        page = FakePage({})
+        uploader = LetterboxdUploader("session", "csrf")
+
+        self.assertFalse(uploader._dismiss_consent(page))
+
+    def test_prefers_current_import_titles_anchor(self):
+        current_selector = (
+            "a.save-users-imported-imdb-history.submit-matched-films:visible"
+        )
+        current = FakeLocator(count=1)
+        page = FakePage({current_selector: current})
+
+        label, control = LetterboxdUploader._import_control(page)
+
+        self.assertEqual(label, "Import Titles anchor")
+        self.assertIs(control, current)
+
+    def test_supports_legacy_import_films_button(self):
+        legacy_selector = "button:visible"
+        legacy = FakeLocator(count=1)
+        page = FakePage({legacy_selector: legacy})
+
+        label, control = LetterboxdUploader._import_control(page)
+
+        self.assertEqual(label, "Import films button")
+        self.assertIs(control, legacy)
 
     @patch("Trakt2Letterboxd.LetterboxdUploader")
     @patch("Trakt2Letterboxd.write_export", return_value=["exports/history.csv"])

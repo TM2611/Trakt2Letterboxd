@@ -61,6 +61,10 @@ The profile must be configured as **Public** in Trakt Privacy Settings.
   cookie with the three real cookies described below.
 - Do not use username/password login.
 - Upload one CSV at a time and wait for the import confirmation.
+- Dismiss the visible `button.fc-button.fc-cta-consent.fc-primary-button` consent
+  control when Letterboxd presents it; continue normally when it is absent.
+- Prefer the current `a.save-users-imported-imdb-history.submit-matched-films`
+  `Import Titles` anchor, with the older `Import X films` button as a fallback.
 - Save diagnostic screenshots to `debug/` when a browser or challenge failure
   occurs.
 
