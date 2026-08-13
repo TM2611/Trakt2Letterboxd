@@ -136,17 +136,18 @@ To upload locally, also add the session and CSRF cookies (and optionally
 python Trakt2Letterboxd.py
 ```
 
-To see the browser while diagnosing a local upload problem, run headed mode:
+Uploads always use headed Chromium. To run a local upload, use:
 
 ```bash
-python Trakt2Letterboxd.py --headed
+python Trakt2Letterboxd.py
 ```
 
-The headed run pauses after an upload failure, allowing inspection of the visible
-page before the browser closes. The scheduled workflow also launches Chromium in
-headed mode, but inside an Xvfb virtual display so it remains unattended while
-avoiding the Cloudflare headless-browser challenge. Trakt requests and
-Playwright waits use a 15-second timeout in both modes.
+The local headed run pauses after an upload failure, allowing inspection of the
+visible page before the browser closes. The scheduled workflow also launches
+Chromium in headed mode, but inside an Xvfb virtual display so it remains
+unattended while avoiding the Cloudflare headless-browser challenge. Trakt
+requests and Playwright waits use a 15-second timeout. There is no headless
+upload mode; use the export-only option when no browser is needed.
 
 `Trakt2Letterboxd.py` loads `.env` automatically for local runs. Existing shell
 variables take precedence over `.env`, which keeps CI and one-off overrides

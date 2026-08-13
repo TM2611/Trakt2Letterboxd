@@ -59,7 +59,7 @@ jobs:
             python Trakt2Letterboxd.py --skip-upload
           else
             xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" \
-              python Trakt2Letterboxd.py --headed
+              python Trakt2Letterboxd.py
           fi
 
       - name: Upload Letterboxd-ready CSVs

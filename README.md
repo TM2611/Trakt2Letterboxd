@@ -54,19 +54,18 @@ Export and upload using the same `.env` values:
 python Trakt2Letterboxd.py
 ```
 
-For local upload debugging, use headed mode to show the Chromium window:
+Uploads always use headed Chromium. For a local upload, run:
 
 ```bash
-python Trakt2Letterboxd.py --headed
+python Trakt2Letterboxd.py
 ```
 
-Headed mode pauses after an upload failure so the local browser page can be
+The local headed browser pauses after an upload failure so its page can be
 inspected before it closes. The Trakt HTTP requests and all Playwright waits use
-a 15-second timeout. Scheduled GitHub Actions runs use headed Chromium inside an
-Xvfb virtual display because Letterboxd's Cloudflare verification rejects the
-detectable headless browser; the workflow remains unattended and does not open a
-real display. True headless mode is still available for export-only runs, but is
-not a reliable Letterboxd upload mode.
+a 15-second timeout. Scheduled GitHub Actions runs use the same headed Chromium
+inside an Xvfb virtual display because Letterboxd's Cloudflare verification
+rejects the detectable headless browser; the workflow remains unattended and
+does not open a real display. There is no headless upload mode.
 
 The script loads `.env` automatically when run locally. Values explicitly set in
 the shell take precedence, so CI and one-off overrides continue to work. Keep

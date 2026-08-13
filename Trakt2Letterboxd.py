@@ -1,8 +1,9 @@
-"""Trakt2Letterboxd - Headless CI/CD exporter & Letterboxd importer.
+"""Trakt2Letterboxd - CI/CD exporter & Letterboxd importer.
 
 The Trakt requests use the public movie-history and movie-ratings endpoints, so
-the target Trakt profile must be public. The script can run unattended inside
-GitHub Actions:
+the target Trakt profile must be public. The script runs Chromium in headed mode
+in every environment; GitHub Actions provides Xvfb so the job remains
+unattended:
 
   1. Fetches the user's public movie history and ratings without an authenticated
      session.
@@ -10,7 +11,7 @@ GitHub Actions:
      1 MB import limit (we split at 950 KB to leave headroom), with the exact
      column headers repeated at the top of every chunk.
   3. Optionally uploads every chunk automatically to letterboxd.com/import
-     using Playwright + playwright-stealth, authenticating via injected
+     using headed Playwright + playwright-stealth, authenticating via injected
      session cookies instead of a username/password flow.
 
 Environment variables used:
@@ -27,7 +28,8 @@ Environment variables used:
 CLI flags:
     --skip-upload                    export CSVs only; do not touch Letterboxd
     --export-dir DIR                 output directory for CSVs (default: exports)
-    --headed                         show the browser for local upload debugging
+    --headed                         retained compatibility flag; headed mode is
+                                     always enabled
 """
 
 import argparse
@@ -327,7 +329,7 @@ class LetterboxdUploader:
         csrf_cookie,
         cf_clearance="",
         debug_dir="debug",
-        headed=False,
+        headed=True,
     ):
         if not session_cookie:
             raise ValueError("LETTERBOXD_SESSION_COOKIE must not be empty")
@@ -337,7 +339,10 @@ class LetterboxdUploader:
         self.csrf_cookie = csrf_cookie
         self.cf_clearance = cf_clearance
         self.debug_dir = debug_dir
-        self.headed = headed
+        # Cloudflare rejects the detectable headless browser. Keep the
+        # compatibility parameter but make headed Chromium the only supported
+        # upload mode in local runs and CI.
+        self.headed = True
 
     # -- helpers ----------------------------------------------------------
 
@@ -539,7 +544,7 @@ class LetterboxdUploader:
         with sync_playwright() as p:
             try:
                 browser = p.chromium.launch(
-                    headless=not self.headed,
+                    headless=False,
                     args=["--disable-blink-features=AutomationControlled"],
                 )
             except Exception as exc:
@@ -698,12 +703,12 @@ def main(argv=None):
     parser.add_argument(
         "--headed",
         action="store_true",
-        help="show the browser window for local upload debugging",
+        default=True,
+        help="compatibility flag; headed Chromium is always used",
     )
     args = parser.parse_args(argv)
 
-    mode = "headed local debug" if args.headed else "headless"
-    print(f"Initializing Trakt2Letterboxd ({mode} mode)...")
+    print("Initializing Trakt2Letterboxd (headed Chromium mode)...")
 
     client = TraktClient()
     print(f"Fetching public Trakt history and ratings for {client.username}...")

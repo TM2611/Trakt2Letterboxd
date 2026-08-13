@@ -138,7 +138,7 @@ class TimeoutAndDebugModeTests(unittest.TestCase):
             timeout=REQUEST_TIMEOUT,
         )
 
-    def test_headed_failure_pause_waits_for_local_inspection(self):
+    def test_default_headed_failure_pause_waits_for_local_inspection(self):
         uploader = LetterboxdUploader("session", "csrf", headed=True)
 
         with patch.dict(os.environ, {"CI": ""}, clear=False):
@@ -156,13 +156,15 @@ class TimeoutAndDebugModeTests(unittest.TestCase):
 
         wait_for_input.assert_not_called()
 
-    def test_headless_failure_does_not_wait_for_input(self):
-        uploader = LetterboxdUploader("session", "csrf")
+    def test_headless_argument_is_ignored(self):
+        uploader = LetterboxdUploader("session", "csrf", headed=False)
 
-        with patch("builtins.input") as wait_for_input:
-            uploader._pause_on_failure(object())
+        self.assertTrue(uploader.headed)
+        with patch.dict(os.environ, {"CI": ""}, clear=False):
+            with patch("builtins.input", return_value="") as wait_for_input:
+                uploader._pause_on_failure(object())
 
-        wait_for_input.assert_not_called()
+        wait_for_input.assert_called_once()
 
 
 class FakeLocator:
@@ -304,7 +306,7 @@ class ImportControlTests(unittest.TestCase):
     @patch("Trakt2Letterboxd.LetterboxdUploader")
     @patch("Trakt2Letterboxd.write_export", return_value=["exports/history.csv"])
     @patch("Trakt2Letterboxd.TraktClient")
-    def test_headed_flag_is_passed_to_uploader(self, client_type, write_export, uploader_type):
+    def test_headed_mode_is_the_default_for_uploader(self, client_type, write_export, uploader_type):
         client_type.return_value.username = "test-user"
         client_type.return_value.fetch_movies.return_value = []
 
@@ -317,7 +319,7 @@ class ImportControlTests(unittest.TestCase):
             },
             clear=False,
         ):
-            result = main(["--headed"])
+            result = main([])
 
         self.assertEqual(result, 0)
         uploader_type.assert_called_once_with(
