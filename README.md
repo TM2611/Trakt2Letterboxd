@@ -1,13 +1,16 @@
 # Trakt2Letterboxd
 
-This project exports a user's Trakt movie history into Letterboxd-ready CSV
-files. It can run locally or automatically every Sunday in GitHub Actions.
+This project exports a user's Trakt movie history and ratings into
+Letterboxd-ready CSV files. It can run locally or automatically every Sunday in
+GitHub Actions.
 
 ## Automated sync
 
 The workflow:
 
 - Reads movie history from the user's **public Trakt profile**.
+- Reads public movie ratings and merges the latest rating onto every matching
+  watch event.
 - Uses the public Trakt API request without a private account login.
 - Excludes non-movie records defensively.
 - Splits exports into CSV files below Letterboxd's 1 MB import limit.
@@ -58,7 +61,9 @@ default when a different public API key is intentionally required.
 Files are written to `exports/`:
 
 - `letterboxd_history.csv`, or numbered parts for a large history export.
-- Every file contains `WatchedDate,tmdbID,imdbID,Title,Year` headers.
+- Every file contains `WatchedDate,tmdbID,imdbID,Title,Year,Rating10` headers.
+- Trakt's integer 1–10 ratings are written to Letterboxd's `Rating10` column;
+  watched-but-unrated movies have a blank value.
 - TV shows, seasons, and episodes are excluded.
 
 In GitHub Actions, the generated files are also available in the
@@ -67,6 +72,7 @@ the `letterboxd-upload-debug` artifact.
 
 ## Privacy and credentials
 
-The Trakt profile must be public for the history endpoint to return data. No
-private Trakt account credential is needed. Treat the Letterboxd cookie values
-like passwords and store them only in a local environment or GitHub Secrets.
+The Trakt profile must be public for the history and ratings endpoints to return
+data. No private Trakt account credential is needed. Treat the Letterboxd cookie
+values like passwords and store them only in a local environment or GitHub
+Secrets.

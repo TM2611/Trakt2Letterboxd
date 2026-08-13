@@ -1,9 +1,11 @@
 """Trakt2Letterboxd - Headless CI/CD exporter & Letterboxd importer.
 
-The Trakt request uses the public movie-history endpoint, so the target Trakt
-profile must be public. The script can run unattended inside GitHub Actions:
+The Trakt requests use the public movie-history and movie-ratings endpoints, so
+the target Trakt profile must be public. The script can run unattended inside
+GitHub Actions:
 
-  1. Fetches the user's public movie history without an authenticated session.
+  1. Fetches the user's public movie history and ratings without an authenticated
+     session.
   2. Writes Letterboxd-ready CSVs chunked so every file stays under Letterboxd's
      1 MB import limit (we split at 950 KB to leave headroom), with the exact
      column headers repeated at the top of every chunk.
@@ -50,7 +52,7 @@ MAX_CHUNK_BYTES = 950 * 1024
 DEFAULT_CLIENT_ID = "0128c95089a7b58477204806a1b62ee130182b48c121c1eb9fe1d37b915fc5cb"
 
 # Exact Letterboxd column headers; they must appear at the top of every chunk.
-LETTERBOXD_HEADERS = ["WatchedDate", "tmdbID", "imdbID", "Title", "Year"]
+LETTERBOXD_HEADERS = ["WatchedDate", "tmdbID", "imdbID", "Title", "Year", "Rating10"]
 
 PAGE_LIMIT = 100
 REQUEST_TIMEOUT = 30
@@ -61,7 +63,7 @@ REQUEST_TIMEOUT = 30
 # ---------------------------------------------------------------------------
 
 class TraktClient:
-    """Fetches movie history from a public Trakt profile."""
+    """Fetches movie history and ratings from a public Trakt profile."""
 
     def __init__(self):
         self.username = os.environ.get("TRAKT_USERNAME", "").strip()
@@ -90,29 +92,38 @@ class TraktClient:
             )
         return response
 
-    def fetch_movies(self):
-        """Fetch every page of the user's public movie history."""
-        movies = []
+    def _fetch_paginated(self, endpoint, label):
+        """Fetch every page from a paginated public user endpoint."""
+        entries = []
         page = 1
         username = quote(self.username, safe="")
         while True:
-            url = (
-                f"{API_ROOT}/users/{username}/history/movies"
-                f"?page={page}&limit={PAGE_LIMIT}"
-            )
+            url = f"{API_ROOT}/users/{username}/{endpoint}?page={page}&limit={PAGE_LIMIT}"
             response = self._get(url)
             page_count = int(response.headers.get("X-Pagination-Page-Count", "1"))
             payload = response.json()
-            kept = 0
-            for entry in payload:
-                row = self._extract_movie_row(entry)
-                if row is not None:
-                    movies.append(row)
-                    kept += 1
-            print(f"  history: page {page}/{page_count} ({kept} movies on this page)")
+            if not isinstance(payload, list):
+                raise RuntimeError(f"Unexpected Trakt response for {url}: expected a list")
+            entries.extend(payload)
+            print(f"  {label}: page {page}/{page_count} ({len(payload)} entries on this page)")
             if page >= page_count or not payload:
                 break
             page += 1
+        return entries
+
+    def fetch_movies(self):
+        """Fetch history and merge the latest Rating10 value into every watch event."""
+        history_entries = self._fetch_paginated("history/movies", "history")
+        ratings_entries = self._fetch_paginated("ratings/movies", "ratings")
+        rating_index = self._build_rating_index(ratings_entries)
+
+        movies = []
+        for entry in history_entries:
+            row = self._extract_movie_row(entry)
+            if row is None:
+                continue
+            row["Rating10"] = self._lookup_rating(row, rating_index)
+            movies.append(row)
         return movies
 
     @staticmethod
@@ -134,7 +145,61 @@ class TraktClient:
             "imdbID": ids.get("imdb") or "",
             "Title": title,
             "Year": movie.get("year") or "",
+            "Rating10": "",
         }
+
+    @staticmethod
+    def _normalize_id(value):
+        """Return a stable lookup representation for a Trakt movie ID."""
+        if value is None or value == "":
+            return ""
+        return str(value)
+
+    @staticmethod
+    def _normalize_rating10(value):
+        """Validate a Trakt 1-10 rating for Letterboxd's Rating10 column."""
+        if isinstance(value, bool):
+            return ""
+        try:
+            rating = float(value)
+        except (TypeError, ValueError):
+            return ""
+        if not rating.is_integer() or not 1 <= rating <= 10:
+            return ""
+        return str(int(rating))
+
+    @classmethod
+    def _build_rating_index(cls, entries):
+        """Index the latest valid rating by every TMDB and IMDb ID it contains."""
+        rating_index = {}
+        for entry in entries:
+            movie = entry.get("movie")
+            rating = cls._normalize_rating10(entry.get("rating"))
+            if not movie or not rating:
+                continue
+
+            ids = movie.get("ids") or {}
+            rated_at = entry.get("rated_at") or ""
+            for id_name in ("tmdb", "imdb"):
+                movie_id = cls._normalize_id(ids.get(id_name))
+                if not movie_id:
+                    continue
+                key = (id_name, movie_id)
+                current = rating_index.get(key)
+                if current is None or rated_at > current[0]:
+                    rating_index[key] = (rated_at, rating)
+        return rating_index
+
+    @classmethod
+    def _lookup_rating(cls, row, rating_index):
+        """Find a row's rating, preferring an exact TMDB match over IMDb."""
+        for column, id_name in (("tmdbID", "tmdb"), ("imdbID", "imdb")):
+            movie_id = cls._normalize_id(row.get(column))
+            if movie_id:
+                match = rating_index.get((id_name, movie_id))
+                if match is not None:
+                    return match[1]
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +491,7 @@ class LetterboxdUploader:
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="Trakt2Letterboxd",
-        description="Export public Trakt movie history to Letterboxd-ready CSVs and upload them.",
+        description="Export public Trakt movie history and ratings to Letterboxd-ready CSVs and upload them.",
     )
     parser.add_argument(
         "--skip-upload",
@@ -443,7 +508,7 @@ def main(argv=None):
     print("Initializing Trakt2Letterboxd (CI mode)...")
 
     client = TraktClient()
-    print(f"Fetching public Trakt history for {client.username}...")
+    print(f"Fetching public Trakt history and ratings for {client.username}...")
     rows = client.fetch_movies()
     all_paths = write_export("letterboxd_history", rows, args.export_dir)
 

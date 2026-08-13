@@ -1,15 +1,16 @@
 # SETUP — Trakt2Letterboxd Automated Sync
 
 This guide configures the weekly Trakt → Letterboxd sync in GitHub Actions. The
-exporter reads movie history from a public Trakt profile, creates Letterboxd-ready
-CSV files, and can upload them through a logged-in Letterboxd browser session.
+exporter reads movie history and ratings from a public Trakt profile, creates
+Letterboxd-ready CSV files, and can upload them through a logged-in Letterboxd
+browser session.
 
 ## What you need
 
 | Item | Purpose |
 |---|---|
 | A GitHub repository containing this project | Runs the scheduled workflow |
-| A Trakt account | Supplies the public movie history |
+| A Trakt account | Supplies the public movie history and ratings |
 | A Letterboxd account | Receives the imported history |
 | A browser session logged in to Letterboxd | Supplies the upload cookie |
 
@@ -17,7 +18,8 @@ CSV files, and can upload them through a logged-in Letterboxd browser session.
 
 ## Step 1 — Make your Trakt profile public
 
-The history endpoint only works for public profiles. This step is required.
+The history and ratings endpoints only work for public profiles. This step is
+required.
 
 1. Sign in to [Trakt](https://trakt.tv).
 2. Open your **Privacy Settings**.
@@ -25,8 +27,8 @@ The history endpoint only works for public profiles. This step is required.
 4. Save the setting and confirm that your profile can be viewed while signed out
    or in a private browser window.
 
-The workflow only reads public movie history. It does not need a private account
-credential or an interactive Trakt login.
+The workflow only reads public movie history and ratings. It does not need a
+private account credential or an interactive Trakt login.
 
 ---
 
@@ -95,12 +97,17 @@ files as an artifact for seven days.
 2. Reads `TRAKT_USERNAME` and the built-in `TRAKT_CLIENT_ID` configuration.
 3. Requests the public movie history endpoint:
    `https://api.trakt.tv/users/{username}/history/movies`.
-4. Fetches all pages, retaining movie records only.
-5. Writes `letterboxd_history.csv` to `exports/`, splitting large exports into
+4. Requests the public movie ratings endpoint:
+   `https://api.trakt.tv/users/{username}/ratings/movies`.
+5. Fetches all pages from both endpoints, retaining movie records only, and
+   merges the latest `rated_at` rating onto every matching history event.
+6. Writes Trakt's integer 1–10 rating to Letterboxd's `Rating10` column;
+   watched-but-unrated movies retain a blank value.
+7. Writes `letterboxd_history.csv` to `exports/`, splitting large exports into
    numbered parts below Letterboxd's 1 MB limit.
-6. Optionally injects the Letterboxd session, CSRF, and clearance cookies and
+8. Optionally injects the Letterboxd session, CSRF, and clearance cookies and
    uploads each CSV.
-7. Stores the generated CSV files as the `letterboxd-ready-csvs` artifact.
+9. Stores the generated CSV files as the `letterboxd-ready-csvs` artifact.
 
 ## Local usage
 
@@ -135,7 +142,7 @@ set `TRAKT_CLIENT_ID` before running the command.
 | Symptom | Resolution |
 |---|---|
 | `TRAKT_USERNAME is required` | Add the public profile name to the environment or the `TRAKT_USERNAME` repository secret. |
-| Trakt returns `401`, `403`, or no history | Confirm the profile visibility is **Public**, check the username, and wait briefly after changing privacy settings. |
+| Trakt returns `401`, `403`, or no history or ratings | Confirm the profile visibility is **Public**, check the username, and wait briefly after changing privacy settings. |
 | `LETTERBOXD_SESSION_COOKIE and LETTERBOXD_CSRF_COOKIE are required` | Set both cookie secrets, or run with `--skip-upload` when only an export is needed. |
 | Letterboxd asks for login | Re-extract `letterboxd.user.CURRENT` (and `com.xk72.webparts.csrf`) from a currently logged-in browser session and replace the secrets. |
 | Cloudflare or Turnstile appears | Check the `letterboxd-upload-debug` artifact and retry with a current `cf_clearance` cookie. |
@@ -145,8 +152,8 @@ set `TRAKT_CLIENT_ID` before running the command.
 
 - Keep the Letterboxd cookie secrets private. They grant access to the
   associated Letterboxd session while valid.
-- The Trakt history request is intentionally public and does not send a private
-  account credential.
+- The Trakt history and ratings requests are intentionally public and do not
+  send a private account credential.
 - Do not commit local environment files or session-cookie values.
 - Generated CSVs and debug screenshots are ignored locally and are available only
   as short-lived workflow artifacts.

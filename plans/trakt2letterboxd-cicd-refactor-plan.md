@@ -17,10 +17,11 @@ The upload step requires three cookies captured from a logged-in Letterboxd
 browser session (see "Letterboxd cookie model" below). They are supplied as
 GitHub secrets and are only read when the upload step runs.
 
-The Trakt request is an unauthenticated `GET` to:
+The Trakt requests are unauthenticated `GET`s to:
 
 ```text
 https://api.trakt.tv/users/{username}/history/movies
+https://api.trakt.tv/users/{username}/ratings/movies
 ```
 
 It sends exactly these headers:
@@ -37,11 +38,14 @@ The profile must be configured as **Public** in Trakt Privacy Settings.
 
 ## Data extraction
 
-- Fetch only public movie history.
+- Fetch public movie history and movie ratings.
 - Paginate with a limit of 100 and honor `X-Pagination-Page-Count`.
 - Keep entries containing a `movie` object and drop non-movie records.
-- Preserve the Letterboxd columns `WatchedDate`, `tmdbID`, `imdbID`, `Title`, and
-  `Year`.
+- Preserve one output row per history event and merge the latest rating by
+  `rated_at` using TMDB IDs first and IMDb IDs as a fallback.
+- Preserve the Letterboxd columns `WatchedDate`, `tmdbID`, `imdbID`, `Title`,
+  `Year`, and `Rating10`. Trakt's integer 1–10 rating is written directly to
+  `Rating10`, which Letterboxd converts to its 0.5–5.0 scale.
 
 ## CSV generation
 
@@ -113,3 +117,5 @@ the workflow.
 - Search the project for removed authentication and list-export concepts.
 - Confirm the workflow passes only the current Trakt configuration and the
   three Letterboxd cookies.
+- Verify history and ratings are fetched independently and merged without
+  changing the workflow's secret requirements.
