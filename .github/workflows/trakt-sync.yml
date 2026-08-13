@@ -36,6 +36,8 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Install Playwright browser
+        # Only needed for the Letterboxd upload; skip when exporting CSVs only.
+        if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.skip_upload == 'true') }}
         run: python -m playwright install --with-deps chromium
 
       - name: Run Trakt export and Letterboxd upload
