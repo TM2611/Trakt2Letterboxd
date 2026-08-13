@@ -352,11 +352,40 @@ class LetterboxdUploader:
         self._screenshot(page, "import_timeout")
         return False
 
+    @staticmethod
+    def _apply_stealth_sync(page, stealth_module):
+        """Apply playwright-stealth across the library's supported API shapes.
+
+        playwright-stealth 2.x exposes ``Stealth.apply_stealth_sync`` while
+        older releases expose either ``Stealth.apply_stealth`` or the module
+        level ``stealth_sync`` function.  Keep this compatibility handling in
+        one place so a changed third-party API cannot mask the original error.
+        """
+        stealth_class = getattr(stealth_module, "Stealth", None)
+        if callable(stealth_class):
+            stealth = stealth_class()
+            for method_name in ("apply_stealth_sync", "apply_stealth"):
+                apply_method = getattr(stealth, method_name, None)
+                if callable(apply_method):
+                    apply_method(page)
+                    return f"Stealth.{method_name}"
+
+        legacy_apply = getattr(stealth_module, "stealth_sync", None)
+        if callable(legacy_apply):
+            legacy_apply(page)
+            return "legacy stealth_sync"
+
+        raise ImportError(
+            "Installed playwright-stealth does not expose a supported "
+            "synchronous API (expected Stealth.apply_stealth_sync, "
+            "Stealth.apply_stealth, or stealth_sync)."
+        )
+
     # -- main upload loop -------------------------------------------------
 
     def upload(self, csv_paths):
         from playwright.sync_api import sync_playwright
-        from playwright_stealth import Stealth  # imported lazily: heavy dep
+        import playwright_stealth  # imported lazily: heavy dependency
 
         browser = None
         with sync_playwright() as p:
@@ -381,17 +410,11 @@ class LetterboxdUploader:
                 timezone_id="Europe/London",
             )
 
-            # Apply stealth before any navigation. API differs slightly across
-            # playwright-stealth versions, so try the modern call first.
+            # Apply stealth before any navigation. API differs across
+            # playwright-stealth versions.
             page = context.new_page()
-            try:
-                stealth = Stealth()
-                stealth.apply_stealth(page)
-                print("  playwright-stealth applied (Stealth.apply_stealth).")
-            except (TypeError, AttributeError):
-                from playwright_stealth import stealth_sync
-                stealth_sync(page)
-                print("  playwright-stealth applied (legacy stealth_sync).")
+            stealth_api = self._apply_stealth_sync(page, playwright_stealth)
+            print(f"  playwright-stealth applied ({stealth_api}).")
 
             # Authenticate by injecting the real Letterboxd cookies BEFORE
             # navigating. No username/password flow - that triggers CAPTCHAs.

@@ -1,5 +1,6 @@
 import csv
 import io
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
@@ -8,6 +9,7 @@ from Trakt2Letterboxd import (
     TraktClient,
     _serialize_rows,
     csv_chunks,
+    LetterboxdUploader,
 )
 
 
@@ -104,6 +106,50 @@ class TraktRatingTests(unittest.TestCase):
         self.assertEqual(content.splitlines()[0], ",".join(LETTERBOXD_HEADERS))
         self.assertEqual(parsed[0]["Rating10"], "8")
         self.assertEqual(list(csv_chunks([row], max_bytes=len(content))), [[row]])
+
+
+class StealthCompatibilityTests(unittest.TestCase):
+    def setUp(self):
+        self.page = object()
+
+    def test_uses_current_sync_method(self):
+        apply_stealth_sync = Mock()
+        module = SimpleNamespace(
+            Stealth=Mock(return_value=SimpleNamespace(
+                apply_stealth_sync=apply_stealth_sync,
+            )),
+            stealth_sync=Mock(),
+        )
+
+        api = LetterboxdUploader._apply_stealth_sync(self.page, module)
+
+        self.assertEqual(api, "Stealth.apply_stealth_sync")
+        apply_stealth_sync.assert_called_once_with(self.page)
+        module.stealth_sync.assert_not_called()
+
+    def test_supports_previous_stealth_method(self):
+        apply_stealth = Mock()
+        module = SimpleNamespace(
+            Stealth=Mock(return_value=SimpleNamespace(apply_stealth=apply_stealth)),
+        )
+
+        api = LetterboxdUploader._apply_stealth_sync(self.page, module)
+
+        self.assertEqual(api, "Stealth.apply_stealth")
+        apply_stealth.assert_called_once_with(self.page)
+
+    def test_supports_legacy_module_function(self):
+        stealth_sync = Mock()
+        module = SimpleNamespace(stealth_sync=stealth_sync)
+
+        api = LetterboxdUploader._apply_stealth_sync(self.page, module)
+
+        self.assertEqual(api, "legacy stealth_sync")
+        stealth_sync.assert_called_once_with(self.page)
+
+    def test_rejects_unsupported_api(self):
+        with self.assertRaises(ImportError):
+            LetterboxdUploader._apply_stealth_sync(self.page, SimpleNamespace())
 
 
 if __name__ == "__main__":
