@@ -40,6 +40,13 @@ jobs:
         if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.skip_upload == 'true') }}
         run: python -m playwright install --with-deps chromium
 
+      - name: Install virtual display
+        # Letterboxd's Cloudflare challenge rejects detectable headless
+        # Chromium. Xvfb keeps the job unattended while allowing the browser
+        # itself to run in headed mode, which is also the proven local path.
+        if: ${{ !(github.event_name == 'workflow_dispatch' && github.event.inputs.skip_upload == 'true') }}
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
       - name: Run Trakt export and Letterboxd upload
         env:
           TRAKT_USERNAME: ${{ secrets.TRAKT_USERNAME }}
@@ -51,7 +58,8 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.skip_upload }}" == "true" ]]; then
             python Trakt2Letterboxd.py --skip-upload
           else
-            python Trakt2Letterboxd.py
+            xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" \
+              python Trakt2Letterboxd.py --headed
           fi
 
       - name: Upload Letterboxd-ready CSVs

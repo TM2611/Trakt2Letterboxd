@@ -3,10 +3,11 @@ import io
 import os
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 from Trakt2Letterboxd import (
     CONSENT_SELECTOR,
+    CLOUDFLARE_PATTERNS,
     IMPORT_ERROR_PATTERNS,
     IMPORT_SUCCESS_PATTERNS,
     IMPORT_ERROR_PATTERNS,
@@ -140,10 +141,20 @@ class TimeoutAndDebugModeTests(unittest.TestCase):
     def test_headed_failure_pause_waits_for_local_inspection(self):
         uploader = LetterboxdUploader("session", "csrf", headed=True)
 
-        with patch("builtins.input", return_value="") as wait_for_input:
-            uploader._pause_on_failure(object())
+        with patch.dict(os.environ, {"CI": ""}, clear=False):
+            with patch("builtins.input", return_value="") as wait_for_input:
+                uploader._pause_on_failure(object())
 
         wait_for_input.assert_called_once()
+
+    def test_headed_ci_failure_does_not_wait_for_input(self):
+        uploader = LetterboxdUploader("session", "csrf", headed=True)
+
+        with patch.dict(os.environ, {"CI": "true"}, clear=False):
+            with patch("builtins.input") as wait_for_input:
+                uploader._pause_on_failure(object())
+
+        wait_for_input.assert_not_called()
 
     def test_headless_failure_does_not_wait_for_input(self):
         uploader = LetterboxdUploader("session", "csrf")
@@ -155,9 +166,10 @@ class TimeoutAndDebugModeTests(unittest.TestCase):
 
 
 class FakeLocator:
-    def __init__(self, count=0, visible=True):
+    def __init__(self, count=0, visible=True, text=""):
         self._count = count
         self._visible = visible
+        self._text = text
         self.click_calls = 0
         self.wait_calls = []
 
@@ -179,16 +191,45 @@ class FakeLocator:
     def is_visible(self):
         return self._visible
 
+    def inner_text(self, **kwargs):
+        return self._text
+
 
 class FakePage:
-    def __init__(self, locators):
+    def __init__(self, locators, body_text=""):
         self.locators = locators
+        self.body_text = body_text
 
     def locator(self, selector, **kwargs):
+        if selector == "body":
+            return FakeLocator(count=1, text=self.body_text)
         return self.locators.get(selector, FakeLocator())
 
 
 class ImportControlTests(unittest.TestCase):
+    def test_detects_cloudflare_security_verification_page(self):
+        page = FakePage({}, body_text="Performing security verification")
+
+        self.assertTrue(LetterboxdUploader._cloudflare_blocked(page))
+        self.assertTrue(
+            any(
+                pattern.search("This website uses a security service")
+                for pattern in CLOUDFLARE_PATTERNS
+            )
+        )
+
+    def test_aborts_when_cloudflare_appears_after_file_selection(self):
+        uploader = LetterboxdUploader("session", "csrf")
+        uploader._cloudflare_blocked = Mock(return_value=True)
+        uploader._screenshot = Mock()
+
+        with self.assertRaisesRegex(RuntimeError, "after file selection"):
+            uploader._abort_if_cloudflare(object(), "after_file_selection")
+
+        uploader._screenshot.assert_called_once_with(
+            ANY, "cloudflare_after_file_selection"
+        )
+
     def test_dismisses_exact_consent_button(self):
         consent = FakeLocator(count=1)
         page = FakePage({CONSENT_SELECTOR: consent})

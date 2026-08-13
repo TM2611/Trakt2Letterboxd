@@ -143,9 +143,10 @@ python Trakt2Letterboxd.py --headed
 ```
 
 The headed run pauses after an upload failure, allowing inspection of the visible
-page before the browser closes. This flag is local-only; the scheduled workflow
-continues to launch Chromium headlessly. Trakt requests and Playwright waits use
-a 15-second timeout in both modes.
+page before the browser closes. The scheduled workflow also launches Chromium in
+headed mode, but inside an Xvfb virtual display so it remains unattended while
+avoiding the Cloudflare headless-browser challenge. Trakt requests and
+Playwright waits use a 15-second timeout in both modes.
 
 `Trakt2Letterboxd.py` loads `.env` automatically for local runs. Existing shell
 variables take precedence over `.env`, which keeps CI and one-off overrides

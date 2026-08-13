@@ -60,10 +60,13 @@ For local upload debugging, use headed mode to show the Chromium window:
 python Trakt2Letterboxd.py --headed
 ```
 
-Headed mode is intended for local runs and pauses after an upload failure so the
-current browser page can be inspected before it closes. The Trakt HTTP requests
-and all Playwright waits use a 15-second timeout. Scheduled GitHub Actions runs
-remain headless unless the flag is explicitly supplied.
+Headed mode pauses after an upload failure so the local browser page can be
+inspected before it closes. The Trakt HTTP requests and all Playwright waits use
+a 15-second timeout. Scheduled GitHub Actions runs use headed Chromium inside an
+Xvfb virtual display because Letterboxd's Cloudflare verification rejects the
+detectable headless browser; the workflow remains unattended and does not open a
+real display. True headless mode is still available for export-only runs, but is
+not a reliable Letterboxd upload mode.
 
 The script loads `.env` automatically when run locally. Values explicitly set in
 the shell take precedence, so CI and one-off overrides continue to work. Keep

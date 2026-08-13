@@ -285,12 +285,16 @@ def write_export(name_stem, rows, export_dir):
 # ---------------------------------------------------------------------------
 
 # Cloudflare / Turnstile indicators. If any of these are present we stop and
-# hand the user a screenshot instead of flailing.
+# hand the user a screenshot instead of flailing. The verification page can be
+# injected after the import page has initially loaded, so this check is also
+# performed after the CSV is selected.
 CLOUDFLARE_PATTERNS = [
     re.compile(r"verify you are human", re.IGNORECASE),
     re.compile(r"checking your browser", re.IGNORECASE),
     re.compile(r"just a moment", re.IGNORECASE),
     re.compile(r"security check", re.IGNORECASE),
+    re.compile(r"performing security verification", re.IGNORECASE),
+    re.compile(r"this website uses a security service", re.IGNORECASE),
 ]
 
 # Success indicators on the import page after submitting.
@@ -349,6 +353,11 @@ class LetterboxdUploader:
     def _pause_on_failure(self, page):
         """Keep a headed browser open so a local failure can be inspected."""
         if not self.headed:
+            return
+        # GitHub Actions uses headed Chromium under Xvfb to avoid Cloudflare's
+        # headless fingerprint checks. There is no interactive terminal there,
+        # so never block the workflow waiting for input.
+        if os.environ.get("CI", "").strip().lower() in {"1", "true", "yes"}:
             return
         try:
             input("  headed debug mode: inspect the browser, then press Enter to close it... ")
@@ -449,6 +458,16 @@ class LetterboxdUploader:
         except Exception:
             return False
         return any(pattern.search(body) for pattern in CLOUDFLARE_PATTERNS)
+
+    def _abort_if_cloudflare(self, page, stage):
+        """Raise a diagnostic error when Cloudflare interrupts the upload."""
+        if not self._cloudflare_blocked(page):
+            return
+        self._screenshot(page, f"cloudflare_{stage}")
+        raise RuntimeError(
+            f"Cloudflare Turnstile challenge detected {stage.replace('_', ' ')} "
+            "on letterboxd.com. Upload aborted - check the screenshot artifact."
+        )
 
     def _await_outcome(
         self,
@@ -593,12 +612,7 @@ class LetterboxdUploader:
                         timeout=PLAYWRIGHT_TIMEOUT_MS,
                     )
 
-                    if self._cloudflare_blocked(page):
-                        self._screenshot(page, "cloudflare_block")
-                        raise RuntimeError(
-                            "Cloudflare Turnstile challenge detected on letterboxd.com. "
-                            "Upload aborted - check the screenshot artifact."
-                        )
+                    self._abort_if_cloudflare(page, "after_navigation")
 
                     self._dismiss_consent(page)
 
@@ -620,6 +634,7 @@ class LetterboxdUploader:
                     # A consent banner can appear after the file has been
                     # selected, so dismiss it again immediately before import.
                     self._dismiss_consent(page)
+                    self._abort_if_cloudflare(page, "after_file_selection")
 
                     # Letterboxd currently renders an anchor labelled
                     # "Import Titles"; retain support for older button markup.
