@@ -48,6 +48,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb
 
       - name: Run Trakt export and Letterboxd upload
+        id: sync
         env:
           TRAKT_USERNAME: ${{ secrets.TRAKT_USERNAME }}
           TRAKT_CLIENT_ID: ${{ secrets.TRAKT_CLIENT_ID || '0128c95089a7b58477204806a1b62ee130182b48c121c1eb9fe1d37b915fc5cb' }}
@@ -55,11 +56,53 @@ jobs:
           LETTERBOXD_CSRF_COOKIE: ${{ secrets.LETTERBOXD_CSRF_COOKIE }}
           LETTERBOXD_CF_CLEARANCE: ${{ secrets.LETTERBOXD_CF_CLEARANCE }}
         run: |
+          set +e
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.skip_upload }}" == "true" ]]; then
-            python Trakt2Letterboxd.py --skip-upload
+            python Trakt2Letterboxd.py --skip-upload 2>&1 | tee sync.log
           else
             xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" \
-              python Trakt2Letterboxd.py
+              python Trakt2Letterboxd.py 2>&1 | tee sync.log
+          fi
+          status=${PIPESTATUS[0]}
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Offer mobile cookie refresh
+        if: ${{ failure() && steps.sync.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          if ! grep -Eiq 'LETTERBOXD_SESSION_COOKIE.*(invalid|expired)|Letterboxd is asking for login' sync.log; then
+            exit 0
+          fi
+
+          refresh_page="https://github.com/${REPO}/actions/workflows/refresh-letterboxd-cookies.yml"
+          {
+            echo "## Letterboxd session expired"
+            echo
+            echo "A mobile cookie refresh has been started. Open the refresh run to get the temporary browser link:"
+            echo
+            echo "[Open Letterboxd cookie refresh workflow](${refresh_page})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -n "$GH_TOKEN" ]]; then
+            if gh workflow run refresh-letterboxd-cookies.yml --repo "$REPO"; then
+              sleep 3
+              refresh_run_id=$(gh run list \
+                --workflow refresh-letterboxd-cookies.yml \
+                --event workflow_dispatch \
+                --limit 1 \
+                --json databaseId \
+                --jq '.[0].databaseId' 2>/dev/null || true)
+              if [[ -n "$refresh_run_id" && "$refresh_run_id" != "null" ]]; then
+                echo "[Open the active refresh run](https://github.com/${REPO}/actions/runs/${refresh_run_id})" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            else
+              echo "The refresh workflow could not be auto-started; use the workflow link above." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "SECRETS_PAT is not configured, so the refresh workflow was not auto-started." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload Letterboxd-ready CSVs

@@ -1,0 +1,59 @@
+name: Refresh Letterboxd Cookies
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trakt-to-letterboxd-sync
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh cookies from mobile browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+
+      - name: Install remote browser and tunnel tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y websockify novnc x11vnc xvfb
+          curl --fail --silent --show-error --location \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            --output /tmp/cloudflared
+          sudo install -m 0755 /tmp/cloudflared /usr/local/bin/cloudflared
+
+      - name: Open temporary mobile browser
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_PAT }}
+          REPO: ${{ github.repository }}
+          DEBUG_DIR: debug
+        run: |
+          xvfb-run --auto-servernum --server-args="-screen 0 1366x768x24" \
+            python scripts/refresh_server.py
+
+      - name: Upload refresh diagnostics (on failure)
+        if: ${{ failure() && !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: letterboxd-cookie-refresh-debug
+          path: debug/
+          retention-days: 1
+          if-no-files-found: ignore
