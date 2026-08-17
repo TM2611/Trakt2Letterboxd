@@ -48,7 +48,52 @@ provided only when intentionally overriding the default public key.
 
 ---
 
-## Step 3 — Extract your Letterboxd cookies
+## Step 3 — Configure mobile cookie refresh
+
+The recommended setup uses a temporary browser hosted by GitHub Actions. When a
+session expires, the sync workflow automatically starts the refresh workflow and
+links to it in the failed run summary. Open that run on your phone, tap the
+temporary browser link, and sign in to Letterboxd once. The runner reads the
+httpOnly cookies directly and updates all three repository secrets; the sync is
+then started again automatically.
+
+The refresh workflow must be merged into the repository's default branch before
+this link can work. GitHub does not expose `workflow_dispatch` workflows from a
+feature branch as repository workflow URLs. If the report says the workflow is
+only present on the current branch, merge that branch first and rerun the sync.
+
+### Create the one-time automation token
+
+GitHub's built-in `GITHUB_TOKEN` cannot update repository secrets, so create a
+fine-grained personal access token at
+[GitHub token settings](https://github.com/settings/personal-access-tokens/new):
+
+1. Restrict it to **Only select repositories** and select this repository.
+2. Grant **Actions: Read and write** so the refresh can re-run the sync.
+3. Grant **Secrets: Read and write** so the refresh can replace the three
+   Letterboxd cookie secrets.
+4. Copy the token once and add it as a repository secret named `SECRETS_PAT` at
+   **Settings → Secrets and variables → Actions → New repository secret**.
+
+The token is used only by GitHub Actions. It is never printed, committed, or
+sent to the remote browser.
+
+### Refresh from a phone
+
+1. Open the failed **Trakt to Letterboxd Sync** run from the repository's
+   **Actions** tab.
+2. In the **Letterboxd session expired** summary section, open the active
+   **refresh run** link.
+3. Open **Open remote Letterboxd browser** from that run's summary.
+4. Sign in to Letterboxd in the temporary browser. Complete Turnstile there if
+   it appears.
+5. Wait for the refresh run to report that secrets were updated and the sync was
+   re-triggered.
+
+The temporary link expires when the refresh run ends. You only need to sign in
+again when the Letterboxd session expires, normally weeks or months later.
+
+### Manual fallback
 
 The uploader does not use a username/password login. It reuses three cookies
 from a browser where you are already logged in: the session cookie
@@ -70,9 +115,9 @@ optionally the Cloudflare clearance cookie (`cf_clearance`).
    - `LETTERBOXD_CSRF_COOKIE` ← `com.xk72.webparts.csrf` value
    - `LETTERBOXD_CF_CLEARANCE` ← `cf_clearance` value (optional)
 
-If you log out of Letterboxd, clear cookies, or the session expires, repeat this
-step and update the secrets. The session and CSRF cookies are the ones to watch;
-`cf_clearance` is long-lived (~1 year).
+If mobile refresh is not configured, or if the refresh workflow is unavailable,
+repeat this step and update the secrets manually. The session and CSRF cookies
+are the ones to watch; `cf_clearance` is long-lived (~1 year).
 
 ---
 
@@ -107,7 +152,9 @@ files as an artifact for seven days.
    numbered parts below Letterboxd's 1 MB limit.
 8. Optionally injects the Letterboxd session, CSRF, and clearance cookies and
    uploads each CSV.
-9. Stores the generated CSV files as the `letterboxd-ready-csvs` artifact.
+9. If Letterboxd asks for login, starts the mobile cookie-refresh workflow and
+   links to the active run in the failed job summary.
+10. Stores the generated CSV files as the `letterboxd-ready-csvs` artifact.
 
 ## Local usage
 
@@ -163,7 +210,7 @@ add `TRAKT_CLIENT_ID` to `.env` or set it before running the command.
 | `TRAKT_USERNAME is required` | Add the public profile name to the environment or the `TRAKT_USERNAME` repository secret. |
 | Trakt returns `401`, `403`, or no history or ratings | Confirm the profile visibility is **Public**, check the username, and wait briefly after changing privacy settings. |
 | `LETTERBOXD_SESSION_COOKIE and LETTERBOXD_CSRF_COOKIE are required` | Set both cookie secrets, or run with `--skip-upload` when only an export is needed. |
-| Letterboxd asks for login | Re-extract `letterboxd.user.CURRENT` (and `com.xk72.webparts.csrf`) from a currently logged-in browser session and replace the secrets. |
+| Letterboxd asks for login | Open the active mobile cookie-refresh run linked in the failed job summary and sign in once. If `SECRETS_PAT` is not configured, use the manual fallback in Step 3. |
 | Cloudflare or Turnstile appears | Check the `letterboxd-upload-debug` artifact and retry with a current `cf_clearance` cookie. |
 | No CSV artifact is produced | Inspect the workflow log for the Trakt response or an empty history export. |
 
@@ -171,6 +218,17 @@ add `TRAKT_CLIENT_ID` to `.env` or set it before running the command.
 
 - Keep the Letterboxd cookie secrets private. They grant access to the
   associated Letterboxd session while valid.
+- Keep `SECRETS_PAT` private. It can update this repository's Actions secrets and
+  dispatch workflows; revoke it immediately if exposed.
+- The temporary noVNC link grants access to the runner's Letterboxd browser while
+  the refresh run is active. Do not share it; it expires when the run ends.
+- The phone's browser interaction, including login input, is carried through the
+  HTTPS/WSS Cloudflare tunnel to the temporary runner. Letterboxd receives the
+  login request directly from the runner, but this design requires trusting the
+  short-lived tunnel service.
+- GitHub-hosted runners use dynamic IPs. The refreshed session and CSRF cookies
+  are reusable across jobs; `cf_clearance` may still require a new Turnstile
+  challenge during the later sync if its IP binding does not match.
 - The Trakt history and ratings requests are intentionally public and do not
   send a private account credential.
 - Do not commit local environment files or session-cookie values.
