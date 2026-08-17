@@ -57,6 +57,11 @@ temporary browser link, and sign in to Letterboxd once. The runner reads the
 httpOnly cookies directly and updates all three repository secrets; the sync is
 then started again automatically.
 
+The refresh workflow must be merged into the repository's default branch before
+this link can work. GitHub does not expose `workflow_dispatch` workflows from a
+feature branch as repository workflow URLs. If the report says the workflow is
+only present on the current branch, merge that branch first and rerun the sync.
+
 ### Create the one-time automation token
 
 GitHub's built-in `GITHUB_TOKEN` cannot update repository secrets, so create a

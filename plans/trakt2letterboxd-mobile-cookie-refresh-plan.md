@@ -117,6 +117,10 @@ Single script the refresh workflow runs. Responsibilities:
 ### 3. `.github/workflows/trakt-sync.yml` (modified)
 
 - Keep the existing job unchanged, but handle the expired-cookie failure path:
+  - The refresh workflow must be merged into the repository's default branch;
+    GitHub does not expose a `workflow_dispatch` workflow URL from a feature
+    branch. On a feature-branch run, report the branch file URL and the merge
+    requirement instead of emitting a dead Actions URL.
   - Keep the existing [`RuntimeError`](Trakt2Letterboxd.py:633) message.
   - Add a step after the run step that, on failure, appends to
     `$GITHUB_STEP_SUMMARY`:

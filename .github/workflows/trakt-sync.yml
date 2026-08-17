@@ -72,12 +72,26 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SECRETS_PAT }}
           REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           if ! grep -Eiq 'LETTERBOXD_SESSION_COOKIE.*(invalid|expired)|Letterboxd is asking for login' sync.log; then
             exit 0
           fi
 
           refresh_page="https://github.com/${REPO}/actions/workflows/refresh-letterboxd-cookies.yml"
+          branch_file="https://github.com/${REPO}/blob/${GITHUB_SHA}/.github/workflows/refresh-letterboxd-cookies.yml"
+
+          if [[ "${GITHUB_REF_NAME}" != "$DEFAULT_BRANCH" ]]; then
+            {
+              echo "## Letterboxd session expired"
+              echo
+              echo "The mobile refresh workflow is present on branch \\`${GITHUB_REF_NAME}\\`, but GitHub only exposes manually dispatchable workflow URLs from the default branch (\\`${DEFAULT_BRANCH}\\`)."
+              echo
+              echo "Merge this branch into the default branch first, then rerun the sync: [view the workflow file on this branch](${branch_file})."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           {
             echo "## Letterboxd session expired"
             echo
