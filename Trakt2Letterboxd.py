@@ -474,6 +474,14 @@ class LetterboxdUploader:
             "on letterboxd.com. Upload aborted - check the screenshot artifact."
         )
 
+    @staticmethod
+    def _session_cookie_expired(page):
+        """Return whether Letterboxd has rendered its login form."""
+        return (
+            page.locator("#field-username").count() > 0
+            or page.locator("#field-password").count() > 0
+        )
+
     def _await_outcome(
         self,
         page,
@@ -622,7 +630,7 @@ class LetterboxdUploader:
                     self._dismiss_consent(page)
 
                     # Confirm we are actually logged in (cookie accepted).
-                    if "/login" in page.url or page.locator('a[href*="/log-in"], a[href*="/login"]').count() > 0:
+                    if self._session_cookie_expired(page):
                         self._screenshot(page, "not_authenticated")
                         raise RuntimeError(
                             "Letterboxd is asking for login - LETTERBOXD_SESSION_COOKIE "

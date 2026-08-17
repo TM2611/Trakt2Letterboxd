@@ -303,6 +303,23 @@ class ImportControlTests(unittest.TestCase):
             )
         )
 
+
+class AuthenticationDetectionTests(unittest.TestCase):
+    def test_username_field_detects_expired_session_cookie(self):
+        page = FakePage({"#field-username": FakeLocator(count=1)})
+
+        self.assertTrue(LetterboxdUploader._session_cookie_expired(page))
+
+    def test_password_field_detects_expired_session_cookie(self):
+        page = FakePage({"#field-password": FakeLocator(count=1)})
+
+        self.assertTrue(LetterboxdUploader._session_cookie_expired(page))
+
+    def test_missing_login_fields_means_session_cookie_is_not_expired(self):
+        page = FakePage({})
+
+        self.assertFalse(LetterboxdUploader._session_cookie_expired(page))
+
     @patch("Trakt2Letterboxd.LetterboxdUploader")
     @patch("Trakt2Letterboxd.write_export", return_value=["exports/history.csv"])
     @patch("Trakt2Letterboxd.TraktClient")
